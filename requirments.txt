@@ -2,3 +2,4 @@ python-nmap==0.7.1
 customtkinter==5.2.2
 python-dotenv==1.0.1
 openai==1.50.0  # Used for DeepSeek compatibility layer
+fpdf2==2.8.7    # PDF report generation
