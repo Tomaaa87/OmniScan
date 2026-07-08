@@ -1,0 +1,19 @@
+# Security (Crucial)
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Virtual Environments 
+venv/
+env/
+
+# Database (Keeps your local scan history off GitHub)
+*.db
+*.sqlite3
+
+# OS / IDE generated files
+.vscode/
+.idea/
+.DS_Store
