@@ -1,36 +1,40 @@
 import requests
 import json
 import logging
+from database import DatabaseManager
 
 class CVEMapper:
     def __init__(self):
         # Base URL for a free, unauthenticated CVE search API
-        # (Using circl.lu as a reliable educational standard)
         self.api_base_url = "https://cve.circl.lu/api/search/"
         
-        # In-memory cache to prevent redundant API calls during development.
-        # This will be replaced by our SQLite .db integration later.
-        self._local_cache = {}
+        # Connect to our new local SQLite database manager
+        self.db = DatabaseManager()
         
         logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     def _query_cve_api(self, vendor_product: str) -> list:
-        """Hits the external API to fetch CVEs for a specific product."""
-        if vendor_product in self._local_cache:
-            logging.info(f"Cache hit for {vendor_product}")
-            return self._local_cache[vendor_product]
+        """Hits the external API or pulls from the local DB cache to fetch CVEs."""
+        
+        # 1. Check local SQLite cache first to prevent rate-limiting
+        cached_data = self.db.get_cached_cve(vendor_product)
+        if cached_data:
+            logging.info(f"Database cache hit for {vendor_product}. Skipping API call.")
+            return cached_data
 
+        # 2. If not in the database, query the public API
         try:
-            # Format the query string (e.g., "apache/http_server")
             response = requests.get(f"{self.api_base_url}{vendor_product}", timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
-                # Extract just the CVE IDs and summaries to keep the payload light
+                # Extract just the CVE IDs and summaries
                 cves = [{"id": item["id"], "summary": item["summary"]} for item in data.get("data", [])]
                 
-                # Store in cache
-                self._local_cache[vendor_product] = cves
+                # 3. Save the new data to the SQLite cache for the next time we see this service
+                logging.info(f"Saving new CVE data for {vendor_product} to local database.")
+                self.db.save_cve_cache(vendor_product, cves)
+                
                 return cves
             else:
                 logging.warning(f"API returned status {response.status_code} for {vendor_product}")
@@ -54,14 +58,13 @@ class CVEMapper:
 
                 # We can only map CVEs if we have a valid product name
                 if product and product.lower() not in ["", "unknown"]:
-                    # Create a search string. (Note: CIRCL API prefers vendor/product format, 
-                    # but a direct product search works for demonstration).
+                    # Create a search string (e.g., "apache_httpd")
                     search_query = product.lower().replace(" ", "_")
                     
                     logging.info(f"Looking up vulnerabilities for: {search_query} {version}")
                     cve_list = self._query_cve_api(search_query)
                     
-                    # Attach the found vulnerabilities to the port data
+                    # Attach the found vulnerabilities
                     port_info["vulnerabilities"] = cve_list
                 else:
                     port_info["vulnerabilities"] = []
@@ -72,7 +75,6 @@ class CVEMapper:
 if __name__ == "__main__":
     mapper = CVEMapper()
     
-    # Mock data simulating the output from scanner.py
     mock_nmap_data = {
         "192.168.1.100": {
             "os_match": "Linux",
@@ -87,6 +89,6 @@ if __name__ == "__main__":
         }
     }
     
-    print("[*] Starting local CVE mapping test...")
+    print("[*] Starting database-backed CVE mapping test...")
     enriched_results = mapper.enrich_scan_results(mock_nmap_data)
     print(json.dumps(enriched_results, indent=4))

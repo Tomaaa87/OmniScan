@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 from scanner import OmniScanner
 from cve_mapper import CVEMapper
 from ai_engine import AIEngine
-from export import PDFExportEngine  # <-- New Import
+from export import PDFExportEngine
+from database import DatabaseManager  # <-- NEW: Import the database
 
 # Load environment variables (.env)
 load_dotenv()
@@ -29,11 +30,15 @@ class OmniScanGUI(ctk.CTk):
         self.scanner = OmniScanner()
         self.mapper = CVEMapper()
         self.ai = AIEngine()
-        self.exporter = PDFExportEngine() # <-- Initialize Exporter
+        self.exporter = PDFExportEngine()
+        self.db = DatabaseManager() # <-- NEW: Initialize the database
 
         # State variables to hold data for the PDF
         self.current_ip = ""
         self.current_report = ""
+        
+        # Map to track dropdown strings to database IDs
+        self.history_map = {}
 
         self._build_ui()
 
@@ -46,8 +51,8 @@ class OmniScanGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Shifted the weight down to row 5 to account for the new button
-        self.sidebar_frame.grid_rowconfigure(5, weight=1) 
+        # Shifted the weight down to row 7 to account for the new history elements
+        self.sidebar_frame.grid_rowconfigure(7, weight=1) 
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -76,7 +81,6 @@ class OmniScanGUI(ctk.CTk):
         )
         self.scan_button.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
 
-        # --- NEW EXPORT BUTTON ---
         self.export_button = ctk.CTkButton(
             self.sidebar_frame, 
             text="Generate PDF Report", 
@@ -85,13 +89,34 @@ class OmniScanGUI(ctk.CTk):
             text_color="#FFFFFF",
             hover_color="#555555",
             font=ctk.CTkFont(weight="bold"),
-            state="disabled" # Disabled until a scan completes
+            state="disabled"
         )
         self.export_button.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
 
-        # Moved status label to row 4
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Status: Idle", text_color="#888888")
         self.status_label.grid(row=4, column=0, padx=20, pady=5)
+
+        # --- NEW: History Section ---
+        self.history_label = ctk.CTkLabel(
+            self.sidebar_frame, 
+            text="Scan History", 
+            text_color="#FFFFFF", 
+            font=ctk.CTkFont(weight="bold")
+        )
+        self.history_label.grid(row=5, column=0, padx=20, pady=(20, 0), sticky="w")
+
+        self.history_dropdown = ctk.CTkOptionMenu(
+            self.sidebar_frame,
+            values=["No history found"],
+            command=self.load_historical_scan,
+            fg_color="#222222",
+            button_color="#333333",
+            button_hover_color="#555555"
+        )
+        self.history_dropdown.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
+        
+        # Populate history on launch
+        self.refresh_history_dropdown()
 
         # ================= Main View =================
         self.tabview = ctk.CTkTabview(self, fg_color="#181818", segmented_button_selected_color="#333333")
@@ -101,34 +126,78 @@ class OmniScanGUI(ctk.CTk):
         self.tabview.add("Enriched Data (CVEs)")
         self.tabview.add("AI Intelligence")
 
-        # Terminal Tab
         self.terminal_box = ctk.CTkTextbox(self.tabview.tab("Terminal Logs"), font=("Consolas", 14), fg_color="#000000", text_color="#00FF00")
         self.terminal_box.pack(expand=True, fill="both", padx=10, pady=10)
 
-        # CVE Tab
         self.cve_box = ctk.CTkTextbox(self.tabview.tab("Enriched Data (CVEs)"), font=("Consolas", 13), fg_color="#111111", text_color="#FFFFFF")
         self.cve_box.pack(expand=True, fill="both", padx=10, pady=10)
 
-        # AI Tab
         self.ai_box = ctk.CTkTextbox(self.tabview.tab("AI Intelligence"), font=("Consolas", 14), fg_color="#111111", text_color="#FFFFFF", wrap="word")
         self.ai_box.pack(expand=True, fill="both", padx=10, pady=10)
 
+    # --- NEW: Database Interaction Methods ---
+    def refresh_history_dropdown(self):
+        """Fetches history from DB and updates the UI dropdown."""
+        scans = self.db.get_all_scans()
+        if not scans:
+            self.history_dropdown.configure(values=["No history found"])
+            self.history_dropdown.set("No history found")
+            return
+
+        dropdown_values = []
+        self.history_map.clear()
+        for scan in scans:
+            scan_id, ip, date = scan
+            # Format: [ID] IP_Address - YYYY-MM-DD
+            display_str = f"[{scan_id}] {ip} - {date.split(' ')[0]}" 
+            dropdown_values.append(display_str)
+            self.history_map[display_str] = scan_id
+
+        self.history_dropdown.configure(values=dropdown_values)
+        self.history_dropdown.set("Select a past scan...")
+
+    def load_historical_scan(self, selected_str):
+        """Fires when the user clicks a past scan in the dropdown."""
+        if selected_str not in self.history_map:
+            return
+
+        scan_id = self.history_map[selected_str]
+        scan_data = self.db.get_scan_by_id(scan_id)
+        
+        if not scan_data:
+            return
+
+        self.terminal_box.delete("1.0", ctk.END)
+        self.cve_box.delete("1.0", ctk.END)
+        self.ai_box.delete("1.0", ctk.END)
+
+        self.log_terminal(f"[*] Loading historical scan ID {scan_id} from database...")
+        
+        # Populate UI
+        self.current_ip = scan_data["target_ip"]
+        self.current_report = scan_data["ai_report"]
+        
+        self.log_terminal(f"[+] Successfully loaded data for IP: {self.current_ip}")
+        self.cve_box.insert(ctk.END, json.dumps(scan_data["raw_data"], indent=4))
+        self.ai_box.insert(ctk.END, self.current_report)
+
+        # Re-enable the PDF button for the loaded history
+        self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+        self.status_label.configure(text="Status: History Loaded")
+
+
+    # --- Existing Methods ---
     def log_terminal(self, message: str):
-        """Helper to print logs safely to the GUI."""
         self.terminal_box.insert(ctk.END, message + "\n")
         self.terminal_box.see(ctk.END)
 
     def export_pdf(self):
-        """Triggers the PDF generation using the stored data."""
         if not self.current_ip or not self.current_report:
             self.log_terminal("[!] Error: No scan data available to export.")
             return
 
         self.status_label.configure(text="Status: Generating PDF...")
         try:
-            import traceback
-            self.log_terminal(f"[*] Export: ip={self.current_ip!r}, report_len={len(self.current_report)}")
-            self.log_terminal(f"[*] Export: output_dir={self.exporter.output_dir}")
             filepath = self.exporter.generate_pdf(self.current_ip, self.current_report)
             self.log_terminal(f"\n[+] SUCCESS: PDF Report saved to -> {filepath}")
             self.status_label.configure(text="Status: PDF Saved")
@@ -139,34 +208,29 @@ class OmniScanGUI(ctk.CTk):
             self.status_label.configure(text="Status: Export Failed")
 
     def start_scan_thread(self):
-        """Fires the whole process into a background thread so the GUI doesn't freeze."""
         target_ip = self.ip_entry.get()
         if not target_ip:
             self.log_terminal("[!] Error: No target IP provided.")
             return
 
         self.scan_button.configure(state="disabled", text="Scanning...")
-        self.export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF") # Disable export on new scan
+        self.export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF")
         self.status_label.configure(text="Status: Running Nmap...")
         self.terminal_box.delete("1.0", ctk.END)
         self.cve_box.delete("1.0", ctk.END)
         self.ai_box.delete("1.0", ctk.END)
         
-        # Start background thread
         threading.Thread(target=self._run_full_pipeline, args=(target_ip,), daemon=True).start()
 
     def _run_full_pipeline(self, target_ip):
-        """The core logic pipeline that runs in the background."""
         try:
             # Phase 1: Nmap Scan
             self.log_terminal(f"[*] Initializing Nmap scan against {target_ip}...")
-            # We use a new event loop for the background thread's async call
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             raw_scan_data = loop.run_until_complete(self.scanner.run_scan_async(target_ip))
             
             self.log_terminal("[+] Nmap scan complete. Parsing data...")
-            self.log_terminal(json.dumps(raw_scan_data, indent=2))
 
             # Phase 2: CVE Mapping
             self.status_label.configure(text="Status: Mapping CVEs...")
@@ -182,18 +246,25 @@ class OmniScanGUI(ctk.CTk):
             
             ai_report = self.ai.analyze_vulnerabilities(enriched_data)
             self.ai_box.insert(ctk.END, ai_report)
-            self.log_terminal("[+] AI Analysis complete. Check the AI Intelligence tab.")
+            self.log_terminal("[+] AI Analysis complete.")
 
-            # --- NEW: Save state and enable export button ---
+            # Phase 4: Save & Enable PDF
             self.current_ip = target_ip
             self.current_report = ai_report
             self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+
+            # --- NEW: Save to Database ---
+            self.log_terminal("\n[*] Saving scan to local SQLite database...")
+            self.db.save_scan(target_ip, enriched_data, ai_report)
+            self.log_terminal("[+] Scan archived successfully.")
+            
+            # Safely tell the UI thread to update the dropdown menu
+            self.after(0, self.refresh_history_dropdown)
 
         except Exception as e:
             self.log_terminal(f"\n[!] Pipeline Error: {str(e)}")
         
         finally:
-            # Reset UI state safely
             self.status_label.configure(text="Status: Idle")
             self.scan_button.configure(state="normal", text="Initiate Scan")
 
