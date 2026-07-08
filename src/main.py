@@ -139,7 +139,7 @@ class OmniScanGUI(ctk.CTk):
             
             ai_report = self.ai.analyze_vulnerabilities(enriched_data)
             self.ai_box.insert(ctk.END, ai_report)
-            self.log_terminal("[+] AI Analysis complete. Check the AI Intelligence tab.")
+            self.log_terminal("[+] AI Analysis complete. Check the AI Intelligence tab ")
 
         except Exception as e:
             self.log_terminal(f"\n[!] Pipeline Error: {str(e)}")
