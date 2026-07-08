@@ -40,7 +40,7 @@ class AIEngine:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.3, # Keep it low so the AI is precise and analytical, not "creative"
-                max_tokens=1500
+                max_tokens=3000
             )
             
             return response.choices[0].message.content
