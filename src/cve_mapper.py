@@ -58,8 +58,20 @@ class CVEMapper:
 
                 # We can only map CVEs if we have a valid product name
                 if product and product.lower() not in ["", "unknown"]:
-                    # Create a search string (e.g., "apache_httpd")
-                    search_query = product.lower().replace(" ", "_")
+                    raw_product = product.lower()
+                    
+                    # Nmap to CIRCL Translation Dictionary
+                    # This standardizes Nmap's output into the exact CPE format CIRCL expects
+                    product_map = {
+                        "apache httpd": "apache/http_server",
+                        "mikrotik routeros sshd": "mikrotik/routeros",
+                        "mikrotik router ftpd": "mikrotik/routeros",
+                        "openssh": "openbsd/openssh",
+                        "vsftpd": "vsftpd",
+                    }
+                    
+                    # Use the mapped translation, or fallback to the standard underscore replacement
+                    search_query = product_map.get(raw_product, raw_product.replace(" ", "_"))
                     
                     logging.info(f"Looking up vulnerabilities for: {search_query} {version}")
                     cve_list = self._query_cve_api(search_query)
@@ -70,7 +82,6 @@ class CVEMapper:
                     port_info["vulnerabilities"] = []
 
         return enriched_data
-
 # Local Verification Block
 if __name__ == "__main__":
     mapper = CVEMapper()
