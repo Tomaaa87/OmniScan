@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from scanner import OmniScanner
 from cve_mapper import CVEMapper
 from ai_engine import AIEngine
+from export import PDFExportEngine  # <-- New Import
 
 # Load environment variables (.env)
 load_dotenv()
@@ -28,6 +29,11 @@ class OmniScanGUI(ctk.CTk):
         self.scanner = OmniScanner()
         self.mapper = CVEMapper()
         self.ai = AIEngine()
+        self.exporter = PDFExportEngine() # <-- Initialize Exporter
+
+        # State variables to hold data for the PDF
+        self.current_ip = ""
+        self.current_report = ""
 
         self._build_ui()
 
@@ -39,7 +45,9 @@ class OmniScanGUI(ctk.CTk):
         # ================= Sidebar =================
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(4, weight=1)
+        
+        # Shifted the weight down to row 5 to account for the new button
+        self.sidebar_frame.grid_rowconfigure(5, weight=1) 
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -68,8 +76,22 @@ class OmniScanGUI(ctk.CTk):
         )
         self.scan_button.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
 
+        # --- NEW EXPORT BUTTON ---
+        self.export_button = ctk.CTkButton(
+            self.sidebar_frame, 
+            text="Generate PDF Report", 
+            command=self.export_pdf,
+            fg_color="#333333",  
+            text_color="#FFFFFF",
+            hover_color="#555555",
+            font=ctk.CTkFont(weight="bold"),
+            state="disabled" # Disabled until a scan completes
+        )
+        self.export_button.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+
+        # Moved status label to row 4
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Status: Idle", text_color="#888888")
-        self.status_label.grid(row=3, column=0, padx=20, pady=5)
+        self.status_label.grid(row=4, column=0, padx=20, pady=5)
 
         # ================= Main View =================
         self.tabview = ctk.CTkTabview(self, fg_color="#181818", segmented_button_selected_color="#333333")
@@ -96,6 +118,21 @@ class OmniScanGUI(ctk.CTk):
         self.terminal_box.insert(ctk.END, message + "\n")
         self.terminal_box.see(ctk.END)
 
+    def export_pdf(self):
+        """Triggers the PDF generation using the stored data."""
+        if not self.current_ip or not self.current_report:
+            self.log_terminal("[!] Error: No scan data available to export.")
+            return
+
+        self.status_label.configure(text="Status: Generating PDF...")
+        try:
+            filepath = self.exporter.generate_pdf(self.current_ip, self.current_report)
+            self.log_terminal(f"\n[+] SUCCESS: PDF Report saved to -> {filepath}")
+            self.status_label.configure(text="Status: PDF Saved")
+        except Exception as e:
+            self.log_terminal(f"\n[!] PDF Generation Error: {str(e)}")
+            self.status_label.configure(text="Status: Export Failed")
+
     def start_scan_thread(self):
         """Fires the whole process into a background thread so the GUI doesn't freeze."""
         target_ip = self.ip_entry.get()
@@ -104,6 +141,7 @@ class OmniScanGUI(ctk.CTk):
             return
 
         self.scan_button.configure(state="disabled", text="Scanning...")
+        self.export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF") # Disable export on new scan
         self.status_label.configure(text="Status: Running Nmap...")
         self.terminal_box.delete("1.0", ctk.END)
         self.cve_box.delete("1.0", ctk.END)
@@ -139,7 +177,12 @@ class OmniScanGUI(ctk.CTk):
             
             ai_report = self.ai.analyze_vulnerabilities(enriched_data)
             self.ai_box.insert(ctk.END, ai_report)
-            self.log_terminal("[+] AI Analysis complete. Check the AI Intelligence tab ")
+            self.log_terminal("[+] AI Analysis complete. Check the AI Intelligence tab.")
+
+            # --- NEW: Save state and enable export button ---
+            self.current_ip = target_ip
+            self.current_report = ai_report
+            self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
 
         except Exception as e:
             self.log_terminal(f"\n[!] Pipeline Error: {str(e)}")
