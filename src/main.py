@@ -126,11 +126,16 @@ class OmniScanGUI(ctk.CTk):
 
         self.status_label.configure(text="Status: Generating PDF...")
         try:
+            import traceback
+            self.log_terminal(f"[*] Export: ip={self.current_ip!r}, report_len={len(self.current_report)}")
+            self.log_terminal(f"[*] Export: output_dir={self.exporter.output_dir}")
             filepath = self.exporter.generate_pdf(self.current_ip, self.current_report)
             self.log_terminal(f"\n[+] SUCCESS: PDF Report saved to -> {filepath}")
             self.status_label.configure(text="Status: PDF Saved")
         except Exception as e:
+            import traceback
             self.log_terminal(f"\n[!] PDF Generation Error: {str(e)}")
+            self.log_terminal(f"[!] Full traceback:\n{traceback.format_exc()}")
             self.status_label.configure(text="Status: Export Failed")
 
     def start_scan_thread(self):

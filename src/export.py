@@ -48,57 +48,99 @@ class PDFExportEngine:
 
     def generate_pdf(self, target_ip: str, ai_report: str) -> str:
         """Generates the PDF and saves it to the reports folder."""
+        import sys  # for stderr debug fallback
         
-        # Guarantee the output directory exists before writing
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        def _log(msg):
+            """Log to stderr so it appears even if the GUI log fails."""
+            print(f"[PDFExport] {msg}", file=sys.stderr, flush=True)
+        
+        _log(f"generate_pdf called: ip={target_ip!r}, report_len={len(ai_report)}")
+        _log(f"output_dir={self.output_dir}")
+        
+        # Step 1: Guarantee the output directory exists
+        _log("Step 1: mkdir...")
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            _log(f"Step 1 OK: {self.output_dir} exists={self.output_dir.exists()}")
+        except Exception as e:
+            _log(f"Step 1 FAILED: {e}")
+            raise
 
-        pdf = OmniReport()
+        # Step 2: Create PDF object
+        _log("Step 2: creating OmniReport...")
+        try:
+            pdf = OmniReport()
+            _log("Step 2 OK")
+        except Exception as e:
+            _log(f"Step 2 FAILED: {e}")
+            raise
         
-        # Register Unicode-capable TTF fonts (supports special chars like em-dash, bullets, etc.)
-        pdf.add_font("DejaVuSans", "", self.DEJAVU_SANS, uni=True)
-        pdf.add_font("DejaVuSans", "B", self.DEJAVU_SANS_BOLD, uni=True)
-        pdf.add_font("DejaVuSans", "I", self.DEJAVU_SANS_OBLIQUE, uni=True)
-        pdf.add_font("DejaVuMono", "", self.DEJAVU_MONO, uni=True)
-        pdf.add_font("DejaVuMono", "B", self.DEJAVU_MONO_BOLD, uni=True)
+        # Step 3: Register fonts
+        _log("Step 3: registering fonts...")
+        font_map = [
+            ("DejaVuSans", "", self.DEJAVU_SANS),
+            ("DejaVuSans", "B", self.DEJAVU_SANS_BOLD),
+            ("DejaVuSans", "I", self.DEJAVU_SANS_OBLIQUE),
+            ("DejaVuMono", "", self.DEJAVU_MONO),
+            ("DejaVuMono", "B", self.DEJAVU_MONO_BOLD),
+        ]
+        for family, style, font_path in font_map:
+            if not Path(font_path).exists():
+                raise FileNotFoundError(
+                    f"Font file not found: {font_path}\n"
+                    f"Install DejaVu fonts with: sudo apt install fonts-dejavu-core"
+                )
+            pdf.add_font(family, style, font_path)
+        _log("Step 3 OK")
         
-        pdf.alias_nb_pages()
-        pdf.add_page()
-        
-        # Metadata Section
-        pdf.set_font("DejaVuSans", "B", 12)
-        pdf.set_text_color(0, 51, 102) 
-        pdf.cell(200, 8, text=f"Target Network/IP: {target_ip}")
-        pdf.ln(8)
-        
-        scan_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        pdf.set_font("DejaVuSans", "", 10)
-        pdf.set_text_color(100, 100, 100)
-        pdf.cell(200, 8, text=f"Scan Timestamp: {scan_date}")
-        pdf.ln(12)
-        
-        # Section Header
-        pdf.set_font("DejaVuSans", "B", 14)
-        pdf.set_text_color(30, 30, 30)
-        pdf.cell(200, 10, text="AI Root-Cause & Remediation Analysis")
-        pdf.ln(10)
+        # Step 4: Build pages
+        _log("Step 4: building pages...")
+        try:
+            pdf.alias_nb_pages()
+            pdf.add_page()
+            
+            pdf.set_font("DejaVuSans", "B", 12)
+            pdf.set_text_color(0, 51, 102) 
+            pdf.cell(200, 8, text=f"Target Network/IP: {target_ip}")
+            pdf.ln(8)
+            
+            scan_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            pdf.set_font("DejaVuSans", "", 10)
+            pdf.set_text_color(100, 100, 100)
+            pdf.cell(200, 8, text=f"Scan Timestamp: {scan_date}")
+            pdf.ln(12)
+            
+            pdf.set_font("DejaVuSans", "B", 14)
+            pdf.set_text_color(30, 30, 30)
+            pdf.cell(200, 10, text="AI Root-Cause & Remediation Analysis")
+            pdf.ln(10)
 
-        # AI Report Body — monospace font for code/report readability
-        pdf.set_font("DejaVuMono", "", 10) 
-        pdf.set_text_color(0, 0, 0)
-        
-        cleaned_report = self._clean_text(ai_report)
-        
-        # Write the text with automatic line wrapping
-        pdf.multi_cell(0, 6, text=cleaned_report)
-        
-        # Format filename
-        safe_ip = target_ip.replace('.', '_')
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"OmniScan_{safe_ip}_{timestamp}.pdf"
-        
-        filepath = str(self.output_dir / filename)
-        
-        # Final save execution
-        pdf.output(filepath)
+            pdf.set_font("DejaVuMono", "", 10) 
+            pdf.set_text_color(0, 0, 0)
+            
+            cleaned_report = self._clean_text(ai_report)
+            _log(f"Step 4a: cleaned_report_len={len(cleaned_report)}")
+            
+            pdf.multi_cell(0, 6, text=cleaned_report)
+            _log("Step 4 OK")
+        except Exception as e:
+            _log(f"Step 4 FAILED: {e}")
+            raise
+
+        # Step 5: Format filename and save
+        _log("Step 5: saving PDF...")
+        try:
+            # FIX: Strip slashes and colons so CIDR ranges or IPv6 don't break the path
+            safe_ip = target_ip.replace('.', '_').replace('/', '_').replace(':', '_')
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"OmniScan_{safe_ip}_{timestamp}.pdf"
+            filepath = str(self.output_dir / filename)
+            _log(f"Step 5a: filepath={filepath}")
+            
+            pdf.output(filepath)
+            _log(f"Step 5 OK: file saved, size={Path(filepath).stat().st_size}")
+        except Exception as e:
+            _log(f"Step 5 FAILED: {e}")
+            raise
         
         return filepath
