@@ -3,6 +3,7 @@ import threading
 import json
 import asyncio
 import os
+import socket  # <-- NEW: Used for network discovery
 from dotenv import load_dotenv
 
 # Import our backend engines
@@ -10,7 +11,7 @@ from scanner import OmniScanner
 from cve_mapper import CVEMapper
 from ai_engine import AIEngine
 from export import PDFExportEngine
-from database import DatabaseManager  # <-- NEW: Import the database
+from database import DatabaseManager
 
 # Load environment variables (.env)
 load_dotenv()
@@ -31,7 +32,7 @@ class OmniScanGUI(ctk.CTk):
         self.mapper = CVEMapper()
         self.ai = AIEngine()
         self.exporter = PDFExportEngine()
-        self.db = DatabaseManager() # <-- NEW: Initialize the database
+        self.db = DatabaseManager()
 
         # State variables to hold data for the PDF
         self.current_ip = ""
@@ -51,8 +52,8 @@ class OmniScanGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Shifted the weight down to row 7 to account for the new history elements
-        self.sidebar_frame.grid_rowconfigure(7, weight=1) 
+        # Shifted the weight down to row 8 to account for the new auto-scan button
+        self.sidebar_frame.grid_rowconfigure(8, weight=1) 
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -70,6 +71,18 @@ class OmniScanGUI(ctk.CTk):
         )
         self.ip_entry.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
 
+        # --- NEW: Auto-Scan Network Button ---
+        self.auto_scan_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="Scan Current Network",
+            command=self.start_auto_network_scan,
+            fg_color="#444444", 
+            text_color="#FFFFFF",
+            hover_color="#555555",
+            font=ctk.CTkFont(weight="bold")
+        )
+        self.auto_scan_button.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="ew")
+
         self.scan_button = ctk.CTkButton(
             self.sidebar_frame, 
             text="Initiate Scan", 
@@ -79,7 +92,7 @@ class OmniScanGUI(ctk.CTk):
             hover_color="#CCCCCC",
             font=ctk.CTkFont(weight="bold")
         )
-        self.scan_button.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
+        self.scan_button.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
 
         self.export_button = ctk.CTkButton(
             self.sidebar_frame, 
@@ -91,19 +104,18 @@ class OmniScanGUI(ctk.CTk):
             font=ctk.CTkFont(weight="bold"),
             state="disabled"
         )
-        self.export_button.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+        self.export_button.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
 
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Status: Idle", text_color="#888888")
-        self.status_label.grid(row=4, column=0, padx=20, pady=5)
+        self.status_label.grid(row=5, column=0, padx=20, pady=5)
 
-        # --- NEW: History Section ---
         self.history_label = ctk.CTkLabel(
             self.sidebar_frame, 
             text="Scan History", 
             text_color="#FFFFFF", 
             font=ctk.CTkFont(weight="bold")
         )
-        self.history_label.grid(row=5, column=0, padx=20, pady=(20, 0), sticky="w")
+        self.history_label.grid(row=6, column=0, padx=20, pady=(20, 0), sticky="w")
 
         self.history_dropdown = ctk.CTkOptionMenu(
             self.sidebar_frame,
@@ -113,7 +125,7 @@ class OmniScanGUI(ctk.CTk):
             button_color="#333333",
             button_hover_color="#555555"
         )
-        self.history_dropdown.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
+        self.history_dropdown.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
         
         # Populate history on launch
         self.refresh_history_dropdown()
@@ -135,7 +147,45 @@ class OmniScanGUI(ctk.CTk):
         self.ai_box = ctk.CTkTextbox(self.tabview.tab("AI Intelligence"), font=("Consolas", 14), fg_color="#111111", text_color="#FFFFFF", wrap="word")
         self.ai_box.pack(expand=True, fill="both", padx=10, pady=10)
 
-    # --- NEW: Database Interaction Methods ---
+    # --- NEW: Network Detection Logic ---
+    def get_local_network(self) -> str:
+        """Dynamically determines the local IP and assumes a /24 subnet mask."""
+        try:
+            # Connect a dummy UDP socket to Google's DNS to force the OS to pick an interface
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            
+            # Drop the last octet and append .0/24 (e.g., 192.168.88.32 -> 192.168.88.0/24)
+            subnet_prefix = ".".join(local_ip.split('.')[:3])
+            return f"{subnet_prefix}.0/24"
+        except Exception as e:
+            self.log_terminal(f"[!] Network detection failed: {str(e)}")
+            return ""
+
+    def start_auto_network_scan(self):
+        """Finds the network, populates the UI, and triggers the standard scan."""
+        network_cidr = self.get_local_network()
+        
+        if not network_cidr:
+            self.log_terminal("[!] Error: Could not determine local network routing.")
+            return
+
+        self.log_terminal(f"\n[*] Auto-detected local network: {network_cidr}")
+        
+        # Visually update the text box so you can see what is being scanned
+        self.ip_entry.delete(0, ctk.END)
+        self.ip_entry.insert(0, network_cidr)
+        
+        # Disable the auto-scan button while it runs to prevent double-clicks
+        self.auto_scan_button.configure(state="disabled")
+        
+        # Fire the standard background threading process
+        self.start_scan_thread()
+
+
+    # --- Database Interaction Methods ---
     def refresh_history_dropdown(self):
         """Fetches history from DB and updates the UI dropdown."""
         scans = self.db.get_all_scans()
@@ -214,6 +264,7 @@ class OmniScanGUI(ctk.CTk):
             return
 
         self.scan_button.configure(state="disabled", text="Scanning...")
+        self.auto_scan_button.configure(state="disabled") # Disable auto-scan button too
         self.export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF")
         self.status_label.configure(text="Status: Running Nmap...")
         self.terminal_box.delete("1.0", ctk.END)
@@ -267,6 +318,7 @@ class OmniScanGUI(ctk.CTk):
         finally:
             self.status_label.configure(text="Status: Idle")
             self.scan_button.configure(state="normal", text="Initiate Scan")
+            self.auto_scan_button.configure(state="normal") # <-- Safety reset for new button
 
 if __name__ == "__main__":
     app = OmniScanGUI()
