@@ -41,6 +41,20 @@ class OmniScanGUI(ctk.CTk):
         # Map to track dropdown strings to database IDs
         self.history_map = {}
 
+        # Scan profile definitions: "Display Name" -> "flags"
+        self.scan_profiles = {
+            "Ping Sweep (-sn)":                "-sn",
+            "Quick Scan (-F -T4)":             "-F -T4",
+            "Standard SYN Scan (-sS -T4)":     "-sS -T4",
+            "Service Detection (-sS -sV -T4)": "-sS -sV -T4",
+            "Full Port Scan (-p- -T4)":        "-p- -T4",
+            "Aggressive Scan (-A -T4)":        "-A -T4",
+            "UDP Quick Scan (-sU -F -T4)":     "-sU -F -T4",
+            "Intense Scan, No Ping (-Pn -A -T4)": "-Pn -A -T4",
+            "Top 100 Ports (--top-ports 100 -T4)": "--top-ports 100 -T4",
+            "Stealth SYN (-sS -T4 -f)":        "-sS -T4 -f",
+        }
+
         self._build_ui()
 
     def _build_ui(self):
@@ -52,8 +66,8 @@ class OmniScanGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Shifted the weight down to row 8 to account for the new auto-scan button
-        self.sidebar_frame.grid_rowconfigure(8, weight=1) 
+        # Shifted the weight down to row 10 to account for new profile/port widgets
+        self.sidebar_frame.grid_rowconfigure(10, weight=1) 
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -71,7 +85,7 @@ class OmniScanGUI(ctk.CTk):
         )
         self.ip_entry.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
 
-        # --- NEW: Auto-Scan Network Button ---
+        # --- Auto-Scan Network Button ---
         self.auto_scan_button = ctk.CTkButton(
             self.sidebar_frame,
             text="Scan Current Network",
@@ -83,6 +97,28 @@ class OmniScanGUI(ctk.CTk):
         )
         self.auto_scan_button.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="ew")
 
+        # --- Scan Profile Dropdown ---
+        profile_names = list(self.scan_profiles.keys())
+        default_profile = "Service Detection (-sS -sV -T4)"
+        self.scan_profile_dropdown = ctk.CTkOptionMenu(
+            self.sidebar_frame,
+            values=profile_names,
+            fg_color="#222222",
+            button_color="#333333",
+            button_hover_color="#555555"
+        )
+        self.scan_profile_dropdown.set(default_profile)
+        self.scan_profile_dropdown.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="ew")
+
+        # --- Custom Port Entry ---
+        self.port_entry = ctk.CTkEntry(
+            self.sidebar_frame,
+            placeholder_text="Custom Ports (e.g., 80,443 or 1-1000)",
+            fg_color="#222222",
+            border_color="#555555"
+        )
+        self.port_entry.grid(row=4, column=0, padx=20, pady=(0, 10), sticky="ew")
+
         self.scan_button = ctk.CTkButton(
             self.sidebar_frame, 
             text="Initiate Scan", 
@@ -92,7 +128,7 @@ class OmniScanGUI(ctk.CTk):
             hover_color="#CCCCCC",
             font=ctk.CTkFont(weight="bold")
         )
-        self.scan_button.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+        self.scan_button.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
 
         self.export_button = ctk.CTkButton(
             self.sidebar_frame, 
@@ -104,10 +140,10 @@ class OmniScanGUI(ctk.CTk):
             font=ctk.CTkFont(weight="bold"),
             state="disabled"
         )
-        self.export_button.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
+        self.export_button.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
 
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Status: Idle", text_color="#888888")
-        self.status_label.grid(row=5, column=0, padx=20, pady=5)
+        self.status_label.grid(row=7, column=0, padx=20, pady=5)
 
         self.history_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -115,7 +151,7 @@ class OmniScanGUI(ctk.CTk):
             text_color="#FFFFFF", 
             font=ctk.CTkFont(weight="bold")
         )
-        self.history_label.grid(row=6, column=0, padx=20, pady=(20, 0), sticky="w")
+        self.history_label.grid(row=8, column=0, padx=20, pady=(20, 0), sticky="w")
 
         self.history_dropdown = ctk.CTkOptionMenu(
             self.sidebar_frame,
@@ -125,7 +161,7 @@ class OmniScanGUI(ctk.CTk):
             button_color="#333333",
             button_hover_color="#555555"
         )
-        self.history_dropdown.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
+        self.history_dropdown.grid(row=9, column=0, padx=20, pady=10, sticky="ew")
         
         # Populate history on launch
         self.refresh_history_dropdown()
@@ -276,10 +312,18 @@ class OmniScanGUI(ctk.CTk):
     def _run_full_pipeline(self, target_ip):
         try:
             # Phase 1: Nmap Scan
-            self.log_terminal(f"[*] Initializing Nmap scan against {target_ip}...")
+            # Build the final flag string from profile selection + optional custom ports
+            selected_profile = self.scan_profile_dropdown.get()
+            flags = self.scan_profiles.get(selected_profile, "-sS -sV -T4")
+            
+            custom_ports = self.port_entry.get().strip()
+            if custom_ports:
+                flags += f" -p {custom_ports}"
+            
+            self.log_terminal(f"[*] Initiating Nmap scan against {target_ip} with flags: {flags}")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            raw_scan_data = loop.run_until_complete(self.scanner.run_scan_async(target_ip))
+            raw_scan_data = loop.run_until_complete(self.scanner.run_scan_async(target_ip, flags))
             
             self.log_terminal("[+] Nmap scan complete. Parsing data...")
 

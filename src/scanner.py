@@ -19,12 +19,9 @@ class OmniScanner:
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
 
-    async def run_scan_async(self, target: str, aggressive: bool = False) -> dict:
+    async def run_scan_async(self, target: str, flags: str) -> dict:
         """Runs the scan in a background thread to prevent UI lockup."""
         loop = asyncio.get_event_loop()
-        # Default flags: Syn scan, OS detection, Service version detection
-        flags = "-sS -O -sV -T4" if aggressive else "-sS -sV -T4"
-        
         raw_result = await loop.run_in_executor(
             self.executor, 
             self._execute_scan, 

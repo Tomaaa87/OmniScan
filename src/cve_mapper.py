@@ -47,41 +47,51 @@ class CVEMapper:
     def enrich_scan_results(self, parsed_scan_data: dict) -> dict:
         """
         Iterates through the Nmap parsed results and attaches CVEs 
-        to matching services.
+        to matching services using CPEs and fallback dictionaries.
         """
         enriched_data = parsed_scan_data.copy()
 
         for ip, host_data in enriched_data.items():
             for port_info in host_data.get("ports", []):
-                product = port_info.get("product")
-                version = port_info.get("version")
+                product = port_info.get("product", "")
+                version = port_info.get("version", "")
+                cpe = port_info.get("cpe", "") # <-- Extract the official CPE if Nmap found it
 
-                # We can only map CVEs if we have a valid product name
+                # Layer 1: If Nmap provided a strict CPE (e.g., cpe:/a:apache:http_server:2.4.49)
+                if cpe:
+                    # Strip the 'cpe:/x:' prefix to get the clean search string for CIRCL
+                    clean_cpe = cpe.split(':')
+                    if len(clean_cpe) >= 4:
+                        # Extract vendor and product (e.g., apache/http_server)
+                        search_query = f"{clean_cpe[2]}/{clean_cpe[3]}"
+                        logging.info(f"[*] CPE Match Found! Querying API for: {search_query} {version}")
+                        port_info["vulnerabilities"] = self._query_cve_api(search_query)
+                        continue # Skip to the next port if we got a CPE hit
+
+                # Layer 2: If no CPE exists, fall back to our translation dictionary
                 if product and product.lower() not in ["", "unknown"]:
                     raw_product = product.lower()
                     
-                    # Nmap to CIRCL Translation Dictionary
-                    # This standardizes Nmap's output into the exact CPE format CIRCL expects
+                    # Nmap to CIRCL Translation Dictionary (Fallback)
                     product_map = {
                         "apache httpd": "apache/http_server",
                         "mikrotik routeros sshd": "mikrotik/routeros",
                         "mikrotik router ftpd": "mikrotik/routeros",
                         "openssh": "openbsd/openssh",
                         "vsftpd": "vsftpd",
+                        "lighttpd": "lighttpd/lighttpd",
+                        "nginx": "f5/nginx"
                     }
                     
-                    # Use the mapped translation, or fallback to the standard underscore replacement
                     search_query = product_map.get(raw_product, raw_product.replace(" ", "_"))
                     
-                    logging.info(f"Looking up vulnerabilities for: {search_query} {version}")
-                    cve_list = self._query_cve_api(search_query)
-                    
-                    # Attach the found vulnerabilities
-                    port_info["vulnerabilities"] = cve_list
+                    logging.info(f"[*] Fallback Dictionary Query for: {search_query} {version}")
+                    port_info["vulnerabilities"] = self._query_cve_api(search_query)
                 else:
                     port_info["vulnerabilities"] = []
 
         return enriched_data
+
 # Local Verification Block
 if __name__ == "__main__":
     mapper = CVEMapper()
@@ -94,7 +104,8 @@ if __name__ == "__main__":
                     "port": 80,
                     "service": "http",
                     "product": "Apache httpd",
-                    "version": "2.4.49"
+                    "version": "2.4.49",
+                    "cpe": "cpe:/a:apache:http_server:2.4.49" # Added mock CPE to test new logic
                 }
             ]
         }
