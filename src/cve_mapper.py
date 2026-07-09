@@ -5,8 +5,8 @@ from database import DatabaseManager
 
 class CVEMapper:
     def __init__(self):
-        # Base URL for a free, unauthenticated CVE search API
-        self.api_base_url = "https://cve.circl.lu/api/search/"
+        # Updated to CIRCL's new Vulnerability-Lookup API
+        self.api_base_url = "https://vulnerability.circl.lu/api/search/"
         
         # Connect to our new local SQLite database manager
         self.db = DatabaseManager()
@@ -16,32 +16,69 @@ class CVEMapper:
     def _query_cve_api(self, vendor_product: str) -> list:
         """Hits the external API or pulls from the local DB cache to fetch CVEs."""
         
-        # 1. Check local SQLite cache first to prevent rate-limiting
         cached_data = self.db.get_cached_cve(vendor_product)
         if cached_data:
             logging.info(f"Database cache hit for {vendor_product}. Skipping API call.")
             return cached_data
 
-        # 2. If not in the database, query the public API
         try:
-            response = requests.get(f"{self.api_base_url}{vendor_product}", timeout=10)
+            logging.info(f"[*] Reaching out to CIRCL API for: {vendor_product}")
+            response = requests.get(f"{self.api_base_url}{vendor_product}", timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
-                # Extract just the CVE IDs and summaries
-                cves = [{"id": item["id"], "summary": item["summary"]} for item in data.get("data", [])]
+                cves = []
                 
-                # 3. Save the new data to the SQLite cache for the next time we see this service
-                logging.info(f"Saving new CVE data for {vendor_product} to local database.")
-                self.db.save_cve_cache(vendor_product, cves)
+                if isinstance(data, dict):
+                    # --- NEW: CIRCL's NVD 5.2 JSON Standard Parsing ---
+                    if "results" in data and isinstance(data["results"], dict) and "nvd" in data["results"]:
+                        for entry in data["results"]["nvd"]:
+                            # Each entry is a list: ['cve-202x-xxxx', {metadata}]
+                            if isinstance(entry, list) and len(entry) >= 2:
+                                cve_id = str(entry[0]).upper()
+                                cve_record = entry[1]
+                                
+                                # Extract description deeply nested in the NVD 5.2 container schema
+                                summary = "Details available in NVD database."
+                                try:
+                                    descriptions = cve_record.get("containers", {}).get("cna", {}).get("descriptions", [])
+                                    if descriptions and isinstance(descriptions, list):
+                                        summary = descriptions[0].get("value", summary)
+                                except Exception:
+                                    pass
+                                
+                                cves.append({"id": cve_id, "summary": summary})
+
+                    # --- FALLBACK: Aggressive Fuzzy Parsing ---
+                    elif not cves:
+                        items = []
+                        for key in ["data", "results", "vulnerabilities", "items", "vulns", "cves", "entries"]:
+                            if key in data and isinstance(data[key], list):
+                                items.extend(data[key])
+                        if not items:
+                            items = [v for k, v in data.items() if isinstance(v, dict)]
+                            
+                        for item in items:
+                            cve_id = item.get("id") or item.get("cve_id") or item.get("CVE") or item.get("name")
+                            summary = item.get("summary") or item.get("description") or "No description provided."
+                            if cve_id:
+                                cves.append({"id": cve_id, "summary": summary})
                 
+                # --- VERIFICATION & CACHING ---
+                if cves:
+                    logging.info(f"[+] Successfully extracted {len(cves)} CVEs for {vendor_product}.")
+                    self.db.save_cve_cache(vendor_product, cves)
+                else:
+                    logging.warning(f"[-] 200 OK, but NO CVEs parsed for {vendor_product}.")
+                    logging.warning(f"[-] RAW JSON SNIPPET: {json.dumps(data)[:300]}")
+                    
                 return cves
             else:
-                logging.warning(f"API returned status {response.status_code} for {vendor_product}")
+                logging.warning(f"[!] API returned status {response.status_code} for {vendor_product}")
                 return []
                 
         except requests.exceptions.RequestException as e:
-            logging.error(f"Network error querying CVE API: {e}")
+            logging.error(f"[!] Network error querying CVE API: {e}")
             return []
 
     def enrich_scan_results(self, parsed_scan_data: dict) -> dict:
@@ -71,12 +108,17 @@ class CVEMapper:
                 if not isinstance(port_info, dict):
                     logging.warning(f"Skipping non-dict port entry: {type(port_info).__name__}")
                     continue
+                
                 product = port_info.get("product", "")
                 version = port_info.get("version", "")
                 cpe = port_info.get("cpe", "") # <-- Extract the official CPE if Nmap found it
 
+                # Safety check: Sometimes Nmap returns CPE as a list instead of a string
+                if isinstance(cpe, list) and len(cpe) > 0:
+                    cpe = cpe[0]
+
                 # Layer 1: If Nmap provided a strict CPE (e.g., cpe:/a:apache:http_server:2.4.49)
-                if cpe:
+                if cpe and isinstance(cpe, str):
                     # Strip the 'cpe:/x:' prefix to get the clean search string for CIRCL
                     clean_cpe = cpe.split(':')
                     if len(clean_cpe) >= 4:
