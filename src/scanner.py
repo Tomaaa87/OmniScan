@@ -15,7 +15,12 @@ class OmniScanner:
         try:
             # -sV: Version detection, -T4: Faster execution
             self.nm.scan(hosts=target, arguments=arguments)
-            return self.nm.analysed_output() if hasattr(self.nm, 'analysed_output') else self.nm._scan_result
+            # Use _scan_result dict directly — analysed_output does not exist in python-nmap
+            result = self.nm._scan_result
+            # Defensive: ensure we always return a dict
+            if not isinstance(result, dict):
+                return {"error": f"Unexpected scan result type: {type(result).__name__}"}
+            return result
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
 
@@ -32,6 +37,10 @@ class OmniScanner:
 
     def parse_results(self, raw_data: dict) -> dict:
         """Parses complex Nmap scan dictionary into structured, lightweight data."""
+        # Defensive: handle case where raw_data is not a dict
+        if not isinstance(raw_data, dict):
+            return {"error": f"Invalid scan data type: {type(raw_data).__name__}"}
+
         if "error" in raw_data:
             return raw_data
 
@@ -39,6 +48,10 @@ class OmniScanner:
         scan_data = raw_data.get("scan", {})
 
         for ip, host_info in scan_data.items():
+            # Guard: host_info must be a dict
+            if not isinstance(host_info, dict):
+                continue
+
             parsed_hosts[ip] = {
                 "hostnames": host_info.get("hostnames", []),
                 "os_match": self._extract_os(host_info),
@@ -48,7 +61,13 @@ class OmniScanner:
             # Loop through transport protocols (tcp, udp)
             for proto in ["tcp", "udp"]:
                 if proto in host_info:
-                    for port, port_data in host_info[proto].items():
+                    proto_data = host_info[proto]
+                    if not isinstance(proto_data, dict):
+                        continue
+                    for port, port_data in proto_data.items():
+                        # Guard: port_data must be a dict
+                        if not isinstance(port_data, dict):
+                            continue
                         parsed_hosts[ip]["ports"].append({
                             "port": port,
                             "protocol": proto,
@@ -63,8 +82,10 @@ class OmniScanner:
     def _extract_os(self, host_info: dict) -> str:
         """Helper to safely extract the highest accuracy OS match."""
         os_matches = host_info.get("osmatch", [])
-        if os_matches:
-            return os_matches[0].get("name", "Unknown OS")
+        if os_matches and isinstance(os_matches, list):
+            first_match = os_matches[0]
+            if isinstance(first_match, dict):
+                return first_match.get("name", "Unknown OS")
         return "Unknown OS"
 
 # Simple local verification block

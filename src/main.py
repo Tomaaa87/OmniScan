@@ -318,6 +318,22 @@ class OmniScanGUI(ctk.CTk):
             
             custom_ports = self.port_entry.get().strip()
             if custom_ports:
+                # Strip any existing -p flag (and its argument) from the profile
+                # so we don't end up with two -p flags, which nmap rejects.
+                parts = flags.split()
+                cleaned = []
+                skip = False
+                for p in parts:
+                    if skip:
+                        skip = False
+                        continue
+                    if p.startswith('-p'):
+                        # -p with attached arg like -p- or -p80,443 → skip only this token
+                        if p == '-p':
+                            skip = True  # next token is the port argument
+                        continue
+                    cleaned.append(p)
+                flags = ' '.join(cleaned)
                 flags += f" -p {custom_ports}"
             
             self.log_terminal(f"[*] Initiating Nmap scan against {target_ip} with flags: {flags}")
@@ -325,6 +341,11 @@ class OmniScanGUI(ctk.CTk):
             asyncio.set_event_loop(loop)
             raw_scan_data = loop.run_until_complete(self.scanner.run_scan_async(target_ip, flags))
             
+            # Check if the scan itself returned an error before proceeding
+            if isinstance(raw_scan_data, dict) and "error" in raw_scan_data:
+                self.log_terminal(f"\n[!] Scan Error: {raw_scan_data['error']}")
+                return
+
             self.log_terminal("[+] Nmap scan complete. Parsing data...")
 
             # Phase 2: CVE Mapping

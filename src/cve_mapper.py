@@ -49,10 +49,28 @@ class CVEMapper:
         Iterates through the Nmap parsed results and attaches CVEs 
         to matching services using CPEs and fallback dictionaries.
         """
+        # Defensive: handle non-dict or error-dict input gracefully
+        if not isinstance(parsed_scan_data, dict):
+            logging.error(f"enrich_scan_results received non-dict: {type(parsed_scan_data).__name__}")
+            return {"error": "Invalid scan data format"}
+
+        if "error" in parsed_scan_data:
+            logging.warning(f"enrich_scan_results received error payload: {parsed_scan_data['error']}")
+            return parsed_scan_data
+
         enriched_data = parsed_scan_data.copy()
 
         for ip, host_data in enriched_data.items():
+            # host_data must be a dict; skip non-dict entries
+            if not isinstance(host_data, dict):
+                logging.warning(f"Skipping non-dict host entry for IP {ip}: {type(host_data).__name__}")
+                continue
+
             for port_info in host_data.get("ports", []):
+                # port_info must be a dict; skip non-dict entries
+                if not isinstance(port_info, dict):
+                    logging.warning(f"Skipping non-dict port entry: {type(port_info).__name__}")
+                    continue
                 product = port_info.get("product", "")
                 version = port_info.get("version", "")
                 cpe = port_info.get("cpe", "") # <-- Extract the official CPE if Nmap found it
