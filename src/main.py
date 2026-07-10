@@ -183,6 +183,26 @@ class OmniScanGUI(ctk.CTk):
         self.ai_box = ctk.CTkTextbox(self.tabview.tab("AI Intelligence"), font=("Consolas", 14), fg_color="#111111", text_color="#FFFFFF", wrap="word")
         self.ai_box.pack(expand=True, fill="both", padx=10, pady=10)
 
+        # Allow highlighting and copying, but block manual text modification
+        self.terminal_box.bind("<Key>", self._block_edit_keys)
+        self.cve_box.bind("<Key>", self._block_edit_keys)
+        self.ai_box.bind("<Key>", self._block_edit_keys)
+
+    def _block_edit_keys(self, event):
+        """Block editing keystrokes but allow copy, select-all, and navigation."""
+        # Always allow navigation keys (arrows, home, end, page up/down)
+        if event.keysym in (
+            "Up", "Down", "Left", "Right",
+            "Home", "End", "Prior", "Next",  # Prior=PageUp, Next=PageDown
+        ):
+            return
+        # Allow Ctrl+C (copy), Ctrl+Insert (copy), Ctrl+A (select all)
+        if event.state & 0x4:  # Ctrl is held
+            if event.keysym.lower() in ("c", "a", "insert"):
+                return
+        # Block everything else (typing, delete, backspace, paste, etc.)
+        return "break"
+
     # --- NEW: Network Detection Logic ---
     def get_local_network(self) -> str:
         """Dynamically determines the local IP and assumes a /24 subnet mask."""
