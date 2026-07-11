@@ -4,6 +4,8 @@ import json
 import asyncio
 import os
 import socket  # <-- NEW: Used for network discovery
+from datetime import datetime
+from tkinter import filedialog
 from dotenv import load_dotenv
 
 # Import our backend engines
@@ -385,9 +387,32 @@ class OmniScanGUI(ctk.CTk):
             self.log_terminal("[!] Error: No scan data available to export.")
             return
 
+        # --- Build a smart default filename ---
+        # Strip characters that may cause filesystem issues from the IP
+        safe_ip = self.current_ip.replace('.', '_').replace('/', '_').replace(':', '_')
+        mode_label = "RedTeam" if self.mode_switch_var.get() else "BlueTeam"
+        date_str = datetime.now().strftime("%Y%m%d")
+        default_filename = f"OmniScan_{safe_ip}_{mode_label}_{date_str}.pdf"
+
+        # --- Show native "Save As" file dialog ---
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")],
+            initialfile=default_filename,
+            title="Export Scan Report"
+        )
+
+        # --- Handle user cancellation ---
+        if not file_path:
+            self.log_terminal("[*] PDF export cancelled by user.")
+            self.status_label.configure(text="Status: Export Cancelled")
+            return
+
         self.status_label.configure(text="Status: Generating PDF...")
         try:
-            filepath = self.exporter.generate_pdf(self.current_ip, self.current_report)
+            filepath = self.exporter.generate_pdf(
+                self.current_ip, self.current_report, file_path=file_path
+            )
             self.log_terminal(f"\n[+] SUCCESS: PDF Report saved to -> {filepath}")
             self.status_label.configure(text="Status: PDF Saved")
         except Exception as e:

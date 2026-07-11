@@ -46,8 +46,8 @@ class PDFExportEngine:
         
         return cleaned
 
-    def generate_pdf(self, target_ip: str, ai_report: str) -> str:
-        """Generates the PDF and saves it to the reports folder."""
+    def generate_pdf(self, target_ip: str, ai_report: str, file_path: str = None) -> str:
+        """Generates the PDF and saves it to the specified path or auto-generates one."""
         import sys  # for stderr debug fallback
         
         def _log(msg):
@@ -127,14 +127,20 @@ class PDFExportEngine:
             _log(f"Step 4 FAILED: {e}")
             raise
 
-        # Step 5: Format filename and save
+        # Step 5: Determine filepath and save
         _log("Step 5: saving PDF...")
         try:
-            # FIX: Strip slashes and colons so CIDR ranges or IPv6 don't break the path
-            safe_ip = target_ip.replace('.', '_').replace('/', '_').replace(':', '_')
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"OmniScan_{safe_ip}_{timestamp}.pdf"
-            filepath = str(self.output_dir / filename)
+            if file_path:
+                # Use the user-chosen path from the file dialog
+                filepath = file_path
+                # Ensure parent directory exists
+                Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+            else:
+                # Auto-generate filename (fallback for programmatic use)
+                safe_ip = target_ip.replace('.', '_').replace('/', '_').replace(':', '_')
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"OmniScan_{safe_ip}_{timestamp}.pdf"
+                filepath = str(self.output_dir / filename)
             _log(f"Step 5a: filepath={filepath}")
             
             pdf.output(filepath)
