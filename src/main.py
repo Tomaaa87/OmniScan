@@ -34,9 +34,10 @@ class OmniScanGUI(ctk.CTk):
         self.exporter = PDFExportEngine()
         self.db = DatabaseManager()
 
-        # State variables to hold data for the PDF
+        # State variables to hold data for the PDF and re-analysis
         self.current_ip = ""
         self.current_report = ""
+        self.current_enriched_data = None  # Stored for mode-switch re-analysis
         
         # Map to track dropdown strings to database IDs
         self.history_map = {}
@@ -66,8 +67,8 @@ class OmniScanGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Shifted the weight down to row 10 to account for new profile/port widgets
-        self.sidebar_frame.grid_rowconfigure(10, weight=1) 
+        # Shifted the weight down to row 11 to account for mode switch and re-analyze button
+        self.sidebar_frame.grid_rowconfigure(11, weight=1) 
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -130,6 +131,40 @@ class OmniScanGUI(ctk.CTk):
         )
         self.scan_button.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
 
+        # --- Red Team / Blue Team Mode Switch ---
+        self.mode_switch_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.mode_switch_frame.grid(row=6, column=0, padx=20, pady=(5, 0), sticky="ew")
+        self.mode_switch_frame.grid_columnconfigure(0, weight=1)
+
+        self.mode_switch_var = ctk.BooleanVar(value=False)
+        self.mode_switch = ctk.CTkSwitch(
+            self.mode_switch_frame,
+            text="🔵 Blue Team Mode",
+            variable=self.mode_switch_var,
+            command=self._on_mode_switch_toggle,
+            onvalue=True,
+            offvalue=False,
+            fg_color="#1E3A5F",        # Blue when off (Blue Team)
+            progress_color="#8B0000",   # Dark red when on (Red Team)
+            button_color="#FFFFFF",
+            button_hover_color="#CCCCCC",
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.mode_switch.grid(row=0, column=0, sticky="w")
+
+        # Re-analyze button (hidden until scan data is available)
+        self.reanalyze_button = ctk.CTkButton(
+            self.mode_switch_frame,
+            text="🔄 Re-analyze with AI",
+            command=self._reanalyze_with_current_mode,
+            fg_color="#444444",
+            text_color="#FFFFFF",
+            hover_color="#666666",
+            font=ctk.CTkFont(size=11),
+            state="disabled"
+        )
+        self.reanalyze_button.grid(row=1, column=0, pady=(5, 0), sticky="ew")
+
         self.export_button = ctk.CTkButton(
             self.sidebar_frame, 
             text="Generate PDF Report", 
@@ -140,10 +175,10 @@ class OmniScanGUI(ctk.CTk):
             font=ctk.CTkFont(weight="bold"),
             state="disabled"
         )
-        self.export_button.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
+        self.export_button.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
 
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Status: Idle", text_color="#888888")
-        self.status_label.grid(row=7, column=0, padx=20, pady=5)
+        self.status_label.grid(row=8, column=0, padx=20, pady=5)
 
         self.history_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -151,7 +186,7 @@ class OmniScanGUI(ctk.CTk):
             text_color="#FFFFFF", 
             font=ctk.CTkFont(weight="bold")
         )
-        self.history_label.grid(row=8, column=0, padx=20, pady=(20, 0), sticky="w")
+        self.history_label.grid(row=9, column=0, padx=20, pady=(20, 0), sticky="w")
 
         self.history_dropdown = ctk.CTkOptionMenu(
             self.sidebar_frame,
@@ -161,7 +196,7 @@ class OmniScanGUI(ctk.CTk):
             button_color="#333333",
             button_hover_color="#555555"
         )
-        self.history_dropdown.grid(row=9, column=0, padx=20, pady=10, sticky="ew")
+        self.history_dropdown.grid(row=10, column=0, padx=20, pady=10, sticky="ew")
         
         # Populate history on launch
         self.refresh_history_dropdown()
@@ -202,6 +237,52 @@ class OmniScanGUI(ctk.CTk):
                 return
         # Block everything else (typing, delete, backspace, paste, etc.)
         return "break"
+
+    def _on_mode_switch_toggle(self):
+        """Updates the switch label and style when toggled between Blue/Red Team."""
+        if self.mode_switch_var.get():
+            self.mode_switch.configure(text="🔴 Red Team Mode")
+            self.status_label.configure(text="Status: Red Team Mode Active")
+        else:
+            self.mode_switch.configure(text="🔵 Blue Team Mode")
+            self.status_label.configure(text="Status: Blue Team Mode Active")
+
+    def _reanalyze_with_current_mode(self):
+        """Re-runs only the AI analysis on the stored scan data using the current mode switch setting."""
+        if self.current_enriched_data is None:
+            self.log_terminal("[!] No scan data available for re-analysis. Run a scan first.")
+            return
+
+        red_team = self.mode_switch_var.get()
+        mode_label = "RED TEAM" if red_team else "BLUE TEAM"
+        self.status_label.configure(text=f"Status: Re-analyzing ({mode_label})...")
+        self.reanalyze_button.configure(state="disabled", text="⏳ Analyzing...")
+        self.ai_box.delete("1.0", ctk.END)
+
+        self.log_terminal(f"\n[*] Re-analyzing with DeepSeek in {mode_label} mode...")
+
+        def _run_reanalysis():
+            try:
+                ai_report = self.ai.analyze_vulnerabilities(
+                    self.current_enriched_data, red_team_mode=red_team
+                )
+                self.ai_box.insert(ctk.END, ai_report)
+                self.current_report = ai_report
+                self.log_terminal(f"[+] AI Re-analysis complete ({mode_label} mode).")
+
+                # Update DB with new report
+                if self.current_ip:
+                    self.db.save_scan(self.current_ip, self.current_enriched_data, ai_report)
+                    self.after(0, self.refresh_history_dropdown)
+
+                self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+            except Exception as e:
+                self.log_terminal(f"\n[!] Re-analysis Error: {str(e)}")
+            finally:
+                self.status_label.configure(text=f"Status: Idle ({mode_label} mode)")
+                self.reanalyze_button.configure(state="normal", text="🔄 Re-analyze with AI")
+
+        threading.Thread(target=_run_reanalysis, daemon=True).start()
 
     # --- NEW: Network Detection Logic ---
     def get_local_network(self) -> str:
@@ -282,13 +363,15 @@ class OmniScanGUI(ctk.CTk):
         # Populate UI
         self.current_ip = scan_data["target_ip"]
         self.current_report = scan_data["ai_report"]
-        
+        self.current_enriched_data = scan_data["raw_data"]  # Store for re-analysis
+
         self.log_terminal(f"[+] Successfully loaded data for IP: {self.current_ip}")
         self.cve_box.insert(ctk.END, json.dumps(scan_data["raw_data"], indent=4))
         self.ai_box.insert(ctk.END, self.current_report)
 
-        # Re-enable the PDF button for the loaded history
+        # Re-enable the PDF button and re-analyze button for the loaded history
         self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+        self.reanalyze_button.configure(state="normal")
         self.status_label.configure(text="Status: History Loaded")
 
 
@@ -322,6 +405,7 @@ class OmniScanGUI(ctk.CTk):
         self.scan_button.configure(state="disabled", text="Scanning...")
         self.auto_scan_button.configure(state="disabled") # Disable auto-scan button too
         self.export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF")
+        self.reanalyze_button.configure(state="disabled")
         self.status_label.configure(text="Status: Running Nmap...")
         self.terminal_box.delete("1.0", ctk.END)
         self.cve_box.delete("1.0", ctk.END)
@@ -377,17 +461,21 @@ class OmniScanGUI(ctk.CTk):
             self.log_terminal("[+] CVE Mapping complete. Data forwarded to AI engine.")
 
             # Phase 3: AI Intelligence
-            self.status_label.configure(text="Status: AI Analyzing...")
-            self.log_terminal("\n[*] Waking up DeepSeek engine for root-cause analysis...")
-            
-            ai_report = self.ai.analyze_vulnerabilities(enriched_data)
+            red_team = self.mode_switch_var.get()
+            mode_label = "RED TEAM" if red_team else "BLUE TEAM"
+            self.status_label.configure(text=f"Status: AI Analyzing ({mode_label})...")
+            self.log_terminal(f"\n[*] Waking up DeepSeek engine for {mode_label} analysis...")
+
+            ai_report = self.ai.analyze_vulnerabilities(enriched_data, red_team_mode=red_team)
             self.ai_box.insert(ctk.END, ai_report)
-            self.log_terminal("[+] AI Analysis complete.")
+            self.log_terminal(f"[+] AI Analysis complete ({mode_label} mode).")
 
             # Phase 4: Save & Enable PDF
             self.current_ip = target_ip
             self.current_report = ai_report
+            self.current_enriched_data = enriched_data  # Store for mode-switch re-analysis
             self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+            self.reanalyze_button.configure(state="normal")  # Enable re-analyze button
 
             # --- NEW: Save to Database ---
             self.log_terminal("\n[*] Saving scan to local SQLite database...")
