@@ -13,6 +13,10 @@ env/
 *.db
 *.sqlite3
 
+# Generated reports (keeps your scan data private)
+reports/
+*.pdf
+
 # OS / IDE generated files
 .vscode/
 .idea/
