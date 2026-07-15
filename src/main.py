@@ -76,8 +76,8 @@ class OmniScanGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Shifted the weight down to row 14 to account for mode switch, re-analyze, -Pn, NSE, and custom flags
-        self.sidebar_frame.grid_rowconfigure(14, weight=1) 
+        # Shifted the weight down to row 16 to account for mode switch, re-analyze, -Pn, NSE, custom flags, and progress bar
+        self.sidebar_frame.grid_rowconfigure(16, weight=1) 
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -193,9 +193,21 @@ class OmniScanGUI(ctk.CTk):
         )
         self.scan_button.grid(row=10, column=0, padx=20, pady=10, sticky="ew")
 
+        # --- Indeterminate Progress Bar (hidden until scan starts) ---
+        self.progress_bar = ctk.CTkProgressBar(
+            self.sidebar_frame,
+            mode="indeterminate",
+            height=12,
+            fg_color="#222222",
+            progress_color="#FFFFFF",
+            corner_radius=6
+        )
+        self.progress_bar.grid(row=11, column=0, padx=20, pady=(0, 10), sticky="ew")
+        self.progress_bar.grid_remove()  # Hidden by default
+
         # --- Red Team / Blue Team Mode Switch ---
         self.mode_switch_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
-        self.mode_switch_frame.grid(row=11, column=0, padx=20, pady=(5, 0), sticky="ew")
+        self.mode_switch_frame.grid(row=12, column=0, padx=20, pady=(5, 0), sticky="ew")
         self.mode_switch_frame.grid_columnconfigure(0, weight=1)
 
         self.mode_switch_var = ctk.BooleanVar(value=False)
@@ -237,10 +249,10 @@ class OmniScanGUI(ctk.CTk):
             font=ctk.CTkFont(weight="bold"),
             state="disabled"
         )
-        self.export_button.grid(row=12, column=0, padx=20, pady=10, sticky="ew")
+        self.export_button.grid(row=13, column=0, padx=20, pady=10, sticky="ew")
 
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Status: Idle", text_color="#888888")
-        self.status_label.grid(row=13, column=0, padx=20, pady=5)
+        self.status_label.grid(row=14, column=0, padx=20, pady=5)
 
         self.history_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -248,7 +260,7 @@ class OmniScanGUI(ctk.CTk):
             text_color="#FFFFFF", 
             font=ctk.CTkFont(weight="bold")
         )
-        self.history_label.grid(row=14, column=0, padx=20, pady=(20, 0), sticky="w")
+        self.history_label.grid(row=15, column=0, padx=20, pady=(20, 0), sticky="w")
 
         self.history_dropdown = ctk.CTkOptionMenu(
             self.sidebar_frame,
@@ -258,7 +270,7 @@ class OmniScanGUI(ctk.CTk):
             button_color="#333333",
             button_hover_color="#555555"
         )
-        self.history_dropdown.grid(row=15, column=0, padx=20, pady=10, sticky="ew")
+        self.history_dropdown.grid(row=16, column=0, padx=20, pady=10, sticky="ew")
         
         # Populate history on launch
         self.refresh_history_dropdown()
@@ -321,6 +333,10 @@ class OmniScanGUI(ctk.CTk):
         self.reanalyze_button.configure(state="disabled", text="⏳ Analyzing...")
         self.ai_box.delete("1.0", ctk.END)
 
+        # --- Show progress bar during re-analysis ---
+        self.progress_bar.grid()
+        self.progress_bar.start()
+
         self.log_terminal(f"\n[*] Re-analyzing with DeepSeek in {mode_label} mode...")
 
         def _run_reanalysis():
@@ -328,23 +344,93 @@ class OmniScanGUI(ctk.CTk):
                 ai_report = self.ai.analyze_vulnerabilities(
                     self.current_enriched_data, red_team_mode=red_team
                 )
-                self.ai_box.insert(ctk.END, ai_report)
-                self.current_report = ai_report
-                self.log_terminal(f"[+] AI Re-analysis complete ({mode_label} mode).")
-
-                # Update DB with new report
-                if self.current_ip:
-                    self.db.save_scan(self.current_ip, self.current_enriched_data, ai_report)
-                    self.after(0, self.refresh_history_dropdown)
-
-                self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+                # Defer all UI updates to the main thread
+                self.after(0, self._on_reanalysis_complete, ai_report, mode_label, red_team)
             except Exception as e:
-                self.log_terminal(f"\n[!] Re-analysis Error: {str(e)}")
-            finally:
-                self.status_label.configure(text=f"Status: Idle ({mode_label} mode)")
-                self.reanalyze_button.configure(state="normal", text="🔄 Re-analyze with AI")
+                self.after(0, self._on_reanalysis_error, str(e), mode_label)
 
         threading.Thread(target=_run_reanalysis, daemon=True).start()
+
+    def _on_reanalysis_complete(self, ai_report: str, mode_label: str, red_team: bool):
+        """Thread-safe callback for successful re-analysis."""
+        self.progress_bar.stop()
+        self.progress_bar.grid_remove()
+
+        self.ai_box.insert(ctk.END, ai_report)
+        self.current_report = ai_report
+        self.log_terminal(f"[+] AI Re-analysis complete ({mode_label} mode).")
+
+        # Update DB with new report
+        if self.current_ip:
+            self.db.save_scan(self.current_ip, self.current_enriched_data, ai_report)
+            self.refresh_history_dropdown()
+
+        self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+        self.reanalyze_button.configure(state="normal", text="🔄 Re-analyze with AI")
+        self.status_label.configure(text=f"Status: Idle ({mode_label} mode)")
+
+    def _on_reanalysis_error(self, error_msg: str, mode_label: str):
+        """Thread-safe callback for failed re-analysis."""
+        self.progress_bar.stop()
+        self.progress_bar.grid_remove()
+
+        self.log_terminal(f"\n[!] Re-analysis Error: {error_msg}")
+        self.reanalyze_button.configure(state="normal", text="🔄 Re-analyze with AI")
+        self.status_label.configure(text=f"Status: Idle ({mode_label} mode)")
+
+    def _update_ui_with_results(self, results: dict):
+        """Thread-safe UI callback — runs on the MAIN thread via self.after().
+        
+        This is the ONLY method permitted to mutate UI widgets after a scan
+        completes. It receives a results dictionary from the background thread.
+        """
+        # --- 1. Stop and hide the progress bar ---
+        self.progress_bar.stop()
+        self.progress_bar.grid_remove()
+
+        # --- 2. Re-enable interactive controls ---
+        self.scan_button.configure(state="normal", text="Initiate Scan")
+        self.auto_scan_button.configure(state="normal")
+
+        # --- 3. Dump all accumulated logs into the terminal box ---
+        for line in results.get("logs", []):
+            self.log_terminal(line)
+
+        # --- 4. Handle error case ---
+        if not results.get("success", False):
+            self.status_label.configure(text="Status: Scan Failed")
+            return
+
+        # --- 5. Populate the CVE / enriched-data view ---
+        enriched_data = results.get("enriched_data")
+        if enriched_data:
+            self.cve_box.insert(ctk.END, json.dumps(enriched_data, indent=4))
+
+        # --- 6. Populate the AI Intelligence view ---
+        ai_report = results.get("ai_report")
+        if ai_report:
+            self.ai_box.insert(ctk.END, ai_report)
+
+        # --- 7. Stash results for PDF export and re-analysis ---
+        target_ip = results.get("target_ip", "")
+        self.current_ip = target_ip
+        self.current_report = ai_report or ""
+        self.current_enriched_data = enriched_data
+
+        # --- 8. Enable post-scan buttons ---
+        self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+        self.reanalyze_button.configure(state="normal")
+
+        # --- 9. Persist to database ---
+        if enriched_data and ai_report:
+            self.log_terminal("\n[*] Saving scan to local SQLite database...")
+            self.db.save_scan(target_ip, enriched_data, ai_report)
+            self.log_terminal("[+] Scan archived successfully.")
+            self.refresh_history_dropdown()
+
+        # --- 10. Final status ---
+        mode_label = "RED TEAM" if results.get("red_team") else "BLUE TEAM"
+        self.status_label.configure(text=f"Status: Idle ({mode_label} mode)")
 
     # --- NEW: Network Detection Logic ---
     def get_local_network(self) -> str:
@@ -487,43 +573,66 @@ class OmniScanGUI(ctk.CTk):
             self.log_terminal("[!] Error: No target IP provided.")
             return
 
+        # --- Disable all interactive controls during scan ---
         self.scan_button.configure(state="disabled", text="Scanning...")
-        self.auto_scan_button.configure(state="disabled") # Disable auto-scan button too
+        self.auto_scan_button.configure(state="disabled")
         self.export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF")
         self.reanalyze_button.configure(state="disabled")
         self.status_label.configure(text="Status: Running Nmap...")
+
+        # --- Clear previous results from all views ---
         self.terminal_box.delete("1.0", ctk.END)
         self.cve_box.delete("1.0", ctk.END)
         self.ai_box.delete("1.0", ctk.END)
-        
-        threading.Thread(target=self._run_full_pipeline, args=(target_ip,), daemon=True).start()
 
-    def _run_full_pipeline(self, target_ip):
+        # --- Show and start the indeterminate progress bar ---
+        self.progress_bar.grid()
+        self.progress_bar.start()
+
+        # --- Offload the blocking pipeline to a daemon thread ---
+        threading.Thread(target=self._scan_thread_target, args=(target_ip,), daemon=True).start()
+
+    def _scan_thread_target(self, target_ip):
+        """Runs the FULL pipeline (flag-building → Nmap → CVE → AI) in a background thread.
+        
+        IMPORTANT: This method MUST NOT touch any tkinter/CustomTkinter widget directly.
+        All UI updates are deferred to _update_ui_with_results() via self.after().
+        """
+        # --- Accumulators for results (NO UI calls here) ---
+        logs = []
+        enriched_data = None
+        ai_report = None
+        error_msg = None
+        red_team = self.mode_switch_var.get()  # Safe: BooleanVar.get() is thread-safe to read
+
+        def add_log(msg: str):
+            logs.append(msg)
+
         try:
-            # Phase 1: Nmap Scan
-            # Build the final flag string.
-            # Custom Flags acts as an ABSOLUTE OVERRIDE: when non-empty, it replaces
-            # the scan profile, custom ports, and NSE dropdown entirely.
+            # ============================================================
+            # Phase 0: Build the Nmap flag string
+            # ============================================================
             custom_flags = self.custom_flags_var.get().strip()
 
             if custom_flags:
-                # --- OVERRIDE PATH: use only the custom flags ---
-                # Validate: reject flags with shell metacharacters
                 dangerous_chars = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r']
                 for ch in dangerous_chars:
                     if ch in custom_flags:
-                        self.log_terminal(f"[!] Error: Custom flags contain prohibited character '{ch}'. "
-                                          "Shell metacharacters are not allowed for security reasons.")
+                        error_msg = (f"Custom flags contain prohibited character '{ch}'. "
+                                     "Shell metacharacters are not allowed for security reasons.")
+                        self.after(0, self._update_ui_with_results, {
+                            "success": False, "target_ip": target_ip, "logs": logs,
+                            "enriched_data": None, "ai_report": None,
+                            "error": error_msg, "red_team": red_team
+                        })
                         return
                 flags = custom_flags
-                self.log_terminal("[*] Custom flags override active — ignoring scan profile, "
-                                  "custom ports, and NSE selection.")
+                add_log("[*] Custom flags override active — ignoring scan profile, "
+                        "custom ports, and NSE selection.")
             else:
-                # --- NORMAL PATH: build from profile + ports + NSE ---
                 selected_profile = self.scan_profile_dropdown.get()
                 flags = self.scan_profiles.get(selected_profile, "-sS -sV -T4")
 
-                # Merge custom ports, stripping any existing -p from the profile
                 custom_ports = self.port_entry.get().strip()
                 if custom_ports:
                     parts = flags.split()
@@ -541,10 +650,8 @@ class OmniScanGUI(ctk.CTk):
                     flags = ' '.join(cleaned)
                     flags += f" -p {custom_ports}"
 
-                # Append NSE script category if not "None"
                 nse_category = self.nse_category_var.get()
                 if nse_category and nse_category != "None":
-                    # Strip any existing --script from the profile to avoid conflicts
                     parts = flags.split()
                     cleaned = []
                     skip = 0
@@ -560,63 +667,63 @@ class OmniScanGUI(ctk.CTk):
                     flags = ' '.join(cleaned)
                     flags += f" --script={nse_category}"
 
-            # --- Global Modifier: always append -Pn if the toggle is on ---
             if self.pn_switch_var.get():
                 if "-Pn" not in flags.split():
                     flags += " -Pn"
 
-            self.log_terminal(f"[*] Initiating Nmap scan against {target_ip} with flags: {flags}")
+            # ============================================================
+            # Phase 1: Nmap Scan
+            # ============================================================
+            add_log(f"[*] Initiating Nmap scan against {target_ip} with flags: {flags}")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            raw_scan_data = loop.run_until_complete(self.scanner.run_scan_async(target_ip, flags))
-            
-            # Check if the scan itself returned an error before proceeding
+            raw_scan_data = loop.run_until_complete(
+                self.scanner.run_scan_async(target_ip, flags)
+            )
+
             if isinstance(raw_scan_data, dict) and "error" in raw_scan_data:
-                self.log_terminal(f"\n[!] Scan Error: {raw_scan_data['error']}")
+                error_msg = raw_scan_data["error"]
+                add_log(f"\n[!] Scan Error: {error_msg}")
+                self.after(0, self._update_ui_with_results, {
+                    "success": False, "target_ip": target_ip, "logs": logs,
+                    "enriched_data": None, "ai_report": None,
+                    "error": error_msg, "red_team": red_team
+                })
                 return
 
-            self.log_terminal("[+] Nmap scan complete. Parsing data...")
+            add_log("[+] Nmap scan complete. Parsing data...")
 
+            # ============================================================
             # Phase 2: CVE Mapping
-            self.status_label.configure(text="Status: Mapping CVEs...")
-            self.log_terminal("\n[*] Cross-referencing identified services with CIRCL database...")
+            # ============================================================
+            add_log("\n[*] Cross-referencing identified services with CIRCL database...")
             enriched_data = self.mapper.enrich_scan_results(raw_scan_data)
-            
-            self.cve_box.insert(ctk.END, json.dumps(enriched_data, indent=4))
-            self.log_terminal("[+] CVE Mapping complete. Data forwarded to AI engine.")
+            add_log("[+] CVE Mapping complete. Data forwarded to AI engine.")
 
+            # ============================================================
             # Phase 3: AI Intelligence
-            red_team = self.mode_switch_var.get()
+            # ============================================================
             mode_label = "RED TEAM" if red_team else "BLUE TEAM"
-            self.status_label.configure(text=f"Status: AI Analyzing ({mode_label})...")
-            self.log_terminal(f"\n[*] Waking up DeepSeek engine for {mode_label} analysis...")
-
+            add_log(f"\n[*] Waking up DeepSeek engine for {mode_label} analysis...")
             ai_report = self.ai.analyze_vulnerabilities(enriched_data, red_team_mode=red_team)
-            self.ai_box.insert(ctk.END, ai_report)
-            self.log_terminal(f"[+] AI Analysis complete ({mode_label} mode).")
-
-            # Phase 4: Save & Enable PDF
-            self.current_ip = target_ip
-            self.current_report = ai_report
-            self.current_enriched_data = enriched_data  # Store for mode-switch re-analysis
-            self.export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
-            self.reanalyze_button.configure(state="normal")  # Enable re-analyze button
-
-            # --- NEW: Save to Database ---
-            self.log_terminal("\n[*] Saving scan to local SQLite database...")
-            self.db.save_scan(target_ip, enriched_data, ai_report)
-            self.log_terminal("[+] Scan archived successfully.")
-            
-            # Safely tell the UI thread to update the dropdown menu
-            self.after(0, self.refresh_history_dropdown)
+            add_log(f"[+] AI Analysis complete ({mode_label} mode).")
 
         except Exception as e:
-            self.log_terminal(f"\n[!] Pipeline Error: {str(e)}")
-        
-        finally:
-            self.status_label.configure(text="Status: Idle")
-            self.scan_button.configure(state="normal", text="Initiate Scan")
-            self.auto_scan_button.configure(state="normal") # <-- Safety reset for new button
+            error_msg = str(e)
+            add_log(f"\n[!] Pipeline Error: {error_msg}")
+
+        # ================================================================
+        # Phase 4: Hand EVERYTHING back to the main thread in ONE callback
+        # ================================================================
+        self.after(0, self._update_ui_with_results, {
+            "success": error_msg is None,
+            "target_ip": target_ip,
+            "logs": logs,
+            "enriched_data": enriched_data,
+            "ai_report": ai_report,
+            "error": error_msg,
+            "red_team": red_team,
+        })
 
 if __name__ == "__main__":
     app = OmniScanGUI()
