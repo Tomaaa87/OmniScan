@@ -21,6 +21,8 @@ OmniScan is a desktop vulnerability intelligence platform that combines **Nmap p
 ## Features
 
 -  **GUI-Driven Nmap** — 10 built-in scan profiles (SYN scan, full port scan, aggressive scan, UDP, stealth, etc.) with a single click. No terminal commands needed.
+-  **NSE Script Integration** — Select from 7 Nmap Scripting Engine categories (`vuln`, `exploit`, `brute`, `auth`, `discovery`, `safe`, `default`) to run targeted vulnerability detection, exploitation, and enumeration scripts against discovered services. NSE outputs are parsed and displayed in the enriched data view.
+-  **Custom Nmap Flags (Absolute Override)** — Enter arbitrary Nmap flags to bypass the scan profile, custom ports, and NSE selector entirely. Full control for power users with built-in shell metacharacter sanitization.
 -  **Assume Online (`-Pn`) Toggle** — Treat all hosts as online, bypassing host discovery. Toggle it on/off without changing your scan profile.
 -  **Custom Ports** — Override or extend any scan profile's port range with custom values.
 -  **Auto-Detect Network** — One-click detection of your local subnet (`/24`) and automatic scanning of all hosts.
@@ -43,8 +45,9 @@ OmniScan is a desktop vulnerability intelligence platform that combines **Nmap p
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
 │  │  Scanner  │  │ CVE      │  │   AI     │  │  PDF    │ │
 │  │ (python-  │──│ Mapper   │──│ Engine   │──│ Export  │ │
-│  │  nmap)    │  │ (CIRCL)  │  │(DeepSeek)│  │ (fpdf2) │ │
-│  └──────────┘  └────┬─────┘  └──────────┘  └─────────┘ │
+│  │  nmap +   │  │ (CIRCL)  │  │(DeepSeek)│  │ (fpdf2) │ │
+│  │   NSE)    │  └────┬─────┘  └──────────┘  └─────────┘ │
+│  └──────────┘       │                                    │
 │                     │                                    │
 │              ┌──────▼──────┐                             │
 │              │  SQLite DB  │                             │
@@ -138,6 +141,8 @@ python src/main.py
 | **Scan Current Network** | Auto-detects your local `/24` subnet and populates the target field |
 | **Scan Profile** | Choose from 10 predefined Nmap scan strategies |
 | **Custom Ports** | Override ports (e.g., `80,443` or `1-1000`) |
+| **NSE Scripts Category** | Select an NSE category to run (`vuln`, `exploit`, `brute`, `auth`, `discovery`, `safe`, `default`) |
+| **Custom Nmap Flags** | Enter arbitrary flags to bypass the profile/NSE/ports selectors entirely (absolute override) |
 | **Assume Online (-Pn)** | Toggle ON to skip host discovery (treat all hosts as alive) |
 | **Initiate Scan** | Starts the full pipeline (Nmap → CVE → AI) |
 | **Blue/Red Team Switch** | Toggle between defensive and offensive analysis modes |
@@ -149,13 +154,14 @@ python src/main.py
 
 1. Enter a target IP or click **"Scan Current Network"**.
 2. Select a scan profile from the dropdown (default: *Service Detection*).
-3. Optionally specify custom ports or enable `-Pn`.
-4. Click **"Initiate Scan"**.
-5. Watch the progress in the **Terminal Logs** tab.
-6. Review enriched CVE data in the **Enriched Data (CVEs)** tab.
-7. Read the AI analysis in the **AI Intelligence** tab.
-8. Switch between Blue/Red Team modes and click **"Re-analyze with AI"** for a different perspective.
-9. Click **"Generate PDF Report"** to export your findings.
+3. Optionally specify custom ports, choose an NSE script category, or enter custom Nmap flags.
+4. Toggle **"Assume Online (-Pn)"** if needed.
+5. Click **"Initiate Scan"**.
+6. Watch the progress in the **Terminal Logs** tab.
+7. Review enriched CVE data (including NSE script outputs) in the **Enriched Data (CVEs)** tab.
+8. Read the AI analysis in the **AI Intelligence** tab.
+9. Switch between Blue/Red Team modes and click **"Re-analyze with AI"** for a different perspective.
+10. Click **"Generate PDF Report"** to export your findings.
 
 ### Scan Profiles
 
@@ -171,6 +177,32 @@ python src/main.py
 | Intense Scan, No Ping | `-Pn -A -T4` | Aggressive, skips host discovery |
 | Top 100 Ports | `--top-ports 100 -T4` | Targets the 100 most common ports |
 | Stealth SYN | `-sS -T4 -f` | Fragment packets to evade firewalls |
+
+### NSE Script Categories
+
+| Category | Nmap Flag | What It Does |
+|---|---|---|
+| **None** | *(no scripts)* | No NSE scripts run — fastest scan |
+| **default** | `--script=default` | Safe, informational scripts (Nmap's default set) |
+| **vuln** | `--script=vuln` | Vulnerability detection — checks for known CVEs directly |
+| **exploit** | `--script=exploit` | Active exploitation scripts — attempts to compromise services |
+| **auth** | `--script=auth` | Authentication bypass and credential testing |
+| **brute** | `--script=brute` | Brute-force credential attacks against services |
+| **discovery** | `--script=discovery` | Network and service enumeration beyond port scanning |
+| **safe** | `--script=safe` | Non-intrusive scripts that won't crash services |
+
+> ⚠️ **Warning:** The `exploit` and `brute` categories are actively intrusive and may crash services, trigger IDS/IPS alerts, or lock accounts. Only use against systems you are explicitly authorized to test.
+
+### Custom Nmap Flags (Absolute Override)
+
+When the **Custom Nmap Flags** field is non-empty, it **completely replaces** the scan profile, custom ports, and NSE category selection. This gives you full control for advanced use cases:
+
+```
+# Example: combine multiple NSE scripts with version detection and a specific port range
+-sS -sV -p 1-1000 --script=http-enum,ssl-enum-ciphers,ssh-auth-methods
+```
+
+>  Shell metacharacters (`;`, `|`, `&`, `` ` ``, `$`, etc.) are blocked for security. Only valid Nmap flag syntax is accepted.
 
 ---
 
