@@ -13,7 +13,6 @@ class OmniScanner:
     def _execute_scan(self, target: str, arguments: str) -> dict:
         """Synchronous wrapper for nmap scanning execution."""
         try:
-            # -sV: Version detection, -T4: Faster execution
             self.nm.scan(hosts=target, arguments=arguments)
             # Use _scan_result dict directly — analysed_output does not exist in python-nmap
             result = self.nm._scan_result
@@ -21,6 +20,11 @@ class OmniScanner:
             if not isinstance(result, dict):
                 return {"error": f"Unexpected scan result type: {type(result).__name__}"}
             return result
+        except nmap.PortScannerError as e:
+            # Catches nmap-level errors (invalid flags, permission denied, etc.)
+            return {"error": f"Nmap argument error: {str(e)}. Check your flags and try again."}
+        except nmap.PortScannerTimeout as e:
+            return {"error": f"Scan timed out: {str(e)}"}
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
 
@@ -68,6 +72,11 @@ class OmniScanner:
                         # Guard: port_data must be a dict
                         if not isinstance(port_data, dict):
                             continue
+                        # Extract NSE script outputs if present
+                        nse_outputs = port_data.get('script', {})
+                        if not isinstance(nse_outputs, dict):
+                            nse_outputs = {}
+
                         parsed_hosts[ip]["ports"].append({
                             "port": port,
                             "protocol": proto,
@@ -75,7 +84,9 @@ class OmniScanner:
                             "service": port_data.get("name"),
                             "product": port_data.get("product"),
                             "version": port_data.get("version"),
-                            "extrainfo": port_data.get("extrainfo")
+                            "extrainfo": port_data.get("extrainfo"),
+                            "nse_outputs": nse_outputs,
+                            "vulnerabilities": []
                         })
         return parsed_hosts
 

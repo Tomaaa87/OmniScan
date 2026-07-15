@@ -47,6 +47,10 @@ class OmniScanGUI(ctk.CTk):
         # -Pn (Assume Online) toggle variable
         self.pn_switch_var = ctk.BooleanVar(value=False)
 
+        # NSE Script Category & Custom Flags variables
+        self.nse_category_var = ctk.StringVar(value="None")
+        self.custom_flags_var = ctk.StringVar(value="")
+
         # Scan profile definitions: "Display Name" -> "flags"
         self.scan_profiles = {
             "Ping Sweep (-sn)":                "-sn",
@@ -72,8 +76,8 @@ class OmniScanGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Shifted the weight down to row 12 to account for mode switch, re-analyze button, and -Pn toggle
-        self.sidebar_frame.grid_rowconfigure(12, weight=1) 
+        # Shifted the weight down to row 14 to account for mode switch, re-analyze, -Pn, NSE, and custom flags
+        self.sidebar_frame.grid_rowconfigure(14, weight=1) 
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -125,6 +129,44 @@ class OmniScanGUI(ctk.CTk):
         )
         self.port_entry.grid(row=4, column=0, padx=20, pady=(0, 10), sticky="ew")
 
+        # --- NSE Script Category Selector ---
+        self.nse_label = ctk.CTkLabel(
+            self.sidebar_frame,
+            text="NSE Scripts Category",
+            text_color="#AAAAAA",
+            font=ctk.CTkFont(size=12)
+        )
+        self.nse_label.grid(row=5, column=0, padx=20, pady=(5, 0), sticky="w")
+
+        nse_categories = ["None", "default", "vuln", "safe", "discovery", "exploit", "auth", "brute"]
+        self.nse_dropdown = ctk.CTkOptionMenu(
+            self.sidebar_frame,
+            values=nse_categories,
+            variable=self.nse_category_var,
+            fg_color="#222222",
+            button_color="#333333",
+            button_hover_color="#555555"
+        )
+        self.nse_dropdown.grid(row=6, column=0, padx=20, pady=(0, 10), sticky="ew")
+
+        # --- Custom Nmap Flags Entry ---
+        self.custom_flags_label = ctk.CTkLabel(
+            self.sidebar_frame,
+            text="Custom Nmap Flags",
+            text_color="#AAAAAA",
+            font=ctk.CTkFont(size=12)
+        )
+        self.custom_flags_label.grid(row=7, column=0, padx=20, pady=(5, 0), sticky="w")
+
+        self.custom_flags_entry = ctk.CTkEntry(
+            self.sidebar_frame,
+            placeholder_text="e.g., -sV -p 80 --script=http-enum  (OVERRIDES profile)",
+            textvariable=self.custom_flags_var,
+            fg_color="#222222",
+            border_color="#555555"
+        )
+        self.custom_flags_entry.grid(row=8, column=0, padx=20, pady=(0, 10), sticky="ew")
+
         # --- Assume Online (-Pn) Toggle ---
         self.pn_switch = ctk.CTkSwitch(
             self.sidebar_frame,
@@ -138,7 +180,7 @@ class OmniScanGUI(ctk.CTk):
             button_hover_color="#CCCCCC",
             font=ctk.CTkFont(size=12)
         )
-        self.pn_switch.grid(row=5, column=0, padx=20, pady=(0, 5), sticky="w")
+        self.pn_switch.grid(row=9, column=0, padx=20, pady=(0, 5), sticky="w")
 
         self.scan_button = ctk.CTkButton(
             self.sidebar_frame, 
@@ -149,11 +191,11 @@ class OmniScanGUI(ctk.CTk):
             hover_color="#CCCCCC",
             font=ctk.CTkFont(weight="bold")
         )
-        self.scan_button.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
+        self.scan_button.grid(row=10, column=0, padx=20, pady=10, sticky="ew")
 
         # --- Red Team / Blue Team Mode Switch ---
         self.mode_switch_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
-        self.mode_switch_frame.grid(row=7, column=0, padx=20, pady=(5, 0), sticky="ew")
+        self.mode_switch_frame.grid(row=11, column=0, padx=20, pady=(5, 0), sticky="ew")
         self.mode_switch_frame.grid_columnconfigure(0, weight=1)
 
         self.mode_switch_var = ctk.BooleanVar(value=False)
@@ -195,10 +237,10 @@ class OmniScanGUI(ctk.CTk):
             font=ctk.CTkFont(weight="bold"),
             state="disabled"
         )
-        self.export_button.grid(row=8, column=0, padx=20, pady=10, sticky="ew")
+        self.export_button.grid(row=12, column=0, padx=20, pady=10, sticky="ew")
 
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Status: Idle", text_color="#888888")
-        self.status_label.grid(row=9, column=0, padx=20, pady=5)
+        self.status_label.grid(row=13, column=0, padx=20, pady=5)
 
         self.history_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -206,7 +248,7 @@ class OmniScanGUI(ctk.CTk):
             text_color="#FFFFFF", 
             font=ctk.CTkFont(weight="bold")
         )
-        self.history_label.grid(row=10, column=0, padx=20, pady=(20, 0), sticky="w")
+        self.history_label.grid(row=14, column=0, padx=20, pady=(20, 0), sticky="w")
 
         self.history_dropdown = ctk.CTkOptionMenu(
             self.sidebar_frame,
@@ -216,7 +258,7 @@ class OmniScanGUI(ctk.CTk):
             button_color="#333333",
             button_hover_color="#555555"
         )
-        self.history_dropdown.grid(row=11, column=0, padx=20, pady=10, sticky="ew")
+        self.history_dropdown.grid(row=15, column=0, padx=20, pady=10, sticky="ew")
         
         # Populate history on launch
         self.refresh_history_dropdown()
@@ -459,31 +501,66 @@ class OmniScanGUI(ctk.CTk):
     def _run_full_pipeline(self, target_ip):
         try:
             # Phase 1: Nmap Scan
-            # Build the final flag string from profile selection + optional custom ports
-            selected_profile = self.scan_profile_dropdown.get()
-            flags = self.scan_profiles.get(selected_profile, "-sS -sV -T4")
-            
-            custom_ports = self.port_entry.get().strip()
-            if custom_ports:
-                # Strip any existing -p flag (and its argument) from the profile
-                # so we don't end up with two -p flags, which nmap rejects.
-                parts = flags.split()
-                cleaned = []
-                skip = False
-                for p in parts:
-                    if skip:
-                        skip = False
-                        continue
-                    if p.startswith('-p'):
-                        # -p with attached arg like -p- or -p80,443 → skip only this token
-                        if p == '-p':
-                            skip = True  # next token is the port argument
-                        continue
-                    cleaned.append(p)
-                flags = ' '.join(cleaned)
-                flags += f" -p {custom_ports}"
-            
-            # Append -Pn flag if the "Assume Online" toggle is enabled
+            # Build the final flag string.
+            # Custom Flags acts as an ABSOLUTE OVERRIDE: when non-empty, it replaces
+            # the scan profile, custom ports, and NSE dropdown entirely.
+            custom_flags = self.custom_flags_var.get().strip()
+
+            if custom_flags:
+                # --- OVERRIDE PATH: use only the custom flags ---
+                # Validate: reject flags with shell metacharacters
+                dangerous_chars = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r']
+                for ch in dangerous_chars:
+                    if ch in custom_flags:
+                        self.log_terminal(f"[!] Error: Custom flags contain prohibited character '{ch}'. "
+                                          "Shell metacharacters are not allowed for security reasons.")
+                        return
+                flags = custom_flags
+                self.log_terminal("[*] Custom flags override active — ignoring scan profile, "
+                                  "custom ports, and NSE selection.")
+            else:
+                # --- NORMAL PATH: build from profile + ports + NSE ---
+                selected_profile = self.scan_profile_dropdown.get()
+                flags = self.scan_profiles.get(selected_profile, "-sS -sV -T4")
+
+                # Merge custom ports, stripping any existing -p from the profile
+                custom_ports = self.port_entry.get().strip()
+                if custom_ports:
+                    parts = flags.split()
+                    cleaned = []
+                    skip = False
+                    for p in parts:
+                        if skip:
+                            skip = False
+                            continue
+                        if p.startswith('-p'):
+                            if p == '-p':
+                                skip = True
+                            continue
+                        cleaned.append(p)
+                    flags = ' '.join(cleaned)
+                    flags += f" -p {custom_ports}"
+
+                # Append NSE script category if not "None"
+                nse_category = self.nse_category_var.get()
+                if nse_category and nse_category != "None":
+                    # Strip any existing --script from the profile to avoid conflicts
+                    parts = flags.split()
+                    cleaned = []
+                    skip = 0
+                    for p in parts:
+                        if skip > 0:
+                            skip -= 1
+                            continue
+                        if p.startswith('--script'):
+                            if p == '--script':
+                                skip = 1
+                            continue
+                        cleaned.append(p)
+                    flags = ' '.join(cleaned)
+                    flags += f" --script={nse_category}"
+
+            # --- Global Modifier: always append -Pn if the toggle is on ---
             if self.pn_switch_var.get():
                 if "-Pn" not in flags.split():
                     flags += " -Pn"
