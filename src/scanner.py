@@ -1,12 +1,53 @@
 import nmap
 import json
+import os
+import shutil
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+
+def _build_nmap_search_path():
+    """Return candidate paths for the nmap executable, cross-platform.
+
+    python-nmap does NOT search the system PATH itself — it only checks the
+    literal paths passed in `nmap_search_path`. On Windows, nmap is commonly
+    installed under Program Files and is usually not on PATH, so we add the
+    standard Windows locations (and honor PATH via shutil.which).
+    """
+    candidates = []
+
+    # 1. If nmap is already on PATH, prefer it (covers `nmap` / `nmap.exe`).
+    in_path = shutil.which("nmap")
+    if in_path:
+        candidates.append(in_path)
+
+    if os.name == "nt":
+        # 2. Standard Windows Nmap installation locations.
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        candidates += [
+            os.path.join(program_files, "Nmap", "nmap.exe"),
+            os.path.join(program_files_x86, "Nmap", "nmap.exe"),
+            r"C:\Program Files\Nmap\nmap.exe",
+            r"C:\Program Files (x86)\Nmap\nmap.exe",
+        ]
+    else:
+        # Unix-like default locations.
+        candidates += [
+            "nmap",
+            "/usr/bin/nmap",
+            "/usr/local/bin/nmap",
+            "/sw/bin/nmap",
+            "/opt/local/bin/nmap",
+        ]
+
+    return candidates
+
+
 class OmniScanner:
     def __init__(self):
-        # Initialize the port scanner
-        self.nm = nmap.PortScanner()
+        # Initialize the port scanner, pointing it at the nmap executable.
+        self.nm = nmap.PortScanner(nmap_search_path=_build_nmap_search_path())
         # Thread pool executor to run synchronous nmap calls asynchronously
         self.executor = ThreadPoolExecutor(max_workers=2)
 

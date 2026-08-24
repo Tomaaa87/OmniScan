@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Kali-orange)]()
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Kali%20%7C%20Windows-orange)]()
 
 </div>
 
@@ -87,6 +87,14 @@ sudo pacman -S nmap ttf-dejavu python python-pip
 sudo dnf install nmap dejavu-sans-fonts dejavu-sans-mono-fonts python3 python3-pip -y
 ```
 
+### System Packages (Windows)
+
+1. Install **Python 3.10+** from [python.org](https://www.python.org/downloads/) — tick **"Add Python to PATH"** during installation.
+2. Install **Nmap** from [nmap.org](https://nmap.org/download.html) using the official Windows installer.
+   - During installation, keep the default path (`C:\Program Files (x86)\Nmap`) — OmniScan auto-detects it.
+   - The installer bundles **Npcap** — leave it enabled. It is required for raw-socket scans.
+3. (Optional) Add `C:\Program Files (x86)\Nmap` to your `PATH` if you want to run `nmap` from the terminal directly.
+
 ---
 
 ## Installation
@@ -103,7 +111,13 @@ cd ommiscan
 ```bash
 python3 -m venv venv
 source venv/bin/activate    # Linux/macOS
-# venv\Scripts\activate     # Windows (untested)
+```
+
+Windows (PowerShell):
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 ```
 
 ### 3. Install Python Dependencies
@@ -120,6 +134,12 @@ Create a `.env` file in the project root:
 echo 'DEEPSEEK_API_KEY=sk-your-deepseek-api-key-here' > .env
 ```
 
+Windows (PowerShell):
+
+```powershell
+Set-Content -Path .env -Value 'DEEPSEEK_API_KEY=sk-your-deepseek-api-key-here'
+```
+
 >  Get your API key at [platform.deepseek.com](https://platform.deepseek.com/).  
 >  The `.env` file is already in `.gitignore` — it will **never** be committed to the repository.
 
@@ -127,6 +147,12 @@ echo 'DEEPSEEK_API_KEY=sk-your-deepseek-api-key-here' > .env
 
 ```bash
 python src/main.py
+```
+
+Windows (PowerShell) — for SYN/raw-socket scans, open **PowerShell as Administrator** first:
+
+```powershell
+.\venv\Scripts\python.exe src\main.py
 ```
 
 ---
@@ -266,9 +292,11 @@ ommiscan/
 | Package | Version | Purpose |
 |---|---|---|
 | `python-nmap` | 0.7.1 | Python bindings for Nmap |
+| `requests` | 2.32.3 | HTTP client for the CIRCL CVE API |
 | `customtkinter` | 5.2.2 | Modern dark-themed GUI toolkit |
 | `python-dotenv` | 1.0.1 | Load API keys from `.env` file |
 | `openai` | 1.50.0 | DeepSeek API client (OpenAI-compatible SDK) |
+| `httpx` | 0.27.2 | HTTP transport used by the OpenAI SDK (pinned for compatibility) |
 | `fpdf2` | 2.8.7 | PDF report generation |
 
 ---
@@ -277,39 +305,58 @@ ommiscan/
 
 ### "Nmap not found" or scan fails immediately
 
-Ensure Nmap is installed and in your PATH:
+OmniScan auto-detects Nmap in common locations (including `C:\Program Files (x86)\Nmap\nmap.exe` on Windows).
+
+**Linux:**
 ```bash
 which nmap
 sudo apt install nmap -y       # Debian/Ubuntu/Kali
 ```
 
+**Windows:** make sure Nmap is installed to the default location (`C:\Program Files (x86)\Nmap`). If you installed it elsewhere, add that folder to your `PATH` (OmniScan checks `PATH` too via `nmap.exe`).
+
 ### "DEEPSEEK_API_KEY environment variable is missing"
 
 Create a `.env` file in the project root with your API key:
 ```bash
-echo 'DEEPSEEK_API_KEY=sk-...' > .env
+echo 'DEEPSEEK_API_KEY=sk-...' > .env        # Linux/macOS
+Set-Content -Path .env -Value 'DEEPSEEK_API_KEY=sk-...'   # Windows PowerShell
 ```
 
 ### PDF export fails with font error
 
-Install the DejaVu font package:
+Install the DejaVu font package (Linux):
 ```bash
 sudo apt install fonts-dejavu-core -y
 ```
 
-### "No module named 'customtkinter'"
+### "No module named 'customtkinter'" (or any other module)
 
 Ensure you're in the virtual environment:
 ```bash
-source venv/bin/activate
+source venv/bin/activate           # Linux/macOS
+.\venv\Scripts\Activate.ps1        # Windows PowerShell
 pip install -r requirments.txt
 ```
 
-### Permission errors when scanning
+### `TypeError: Client.__init__() got an unexpected keyword argument 'proxies'`
+
+The `openai` SDK (`1.50.0`) is incompatible with `httpx >= 0.28`. Pin the compatible version:
+```bash
+pip install httpx==0.27.2
+```
+
+### Permission errors when scanning (Linux)
 
 Nmap requires raw socket privileges. Either:
 - Run as root: `sudo python src/main.py` (not recommended)
 - Or use `sudo setcap cap_net_raw+ep /usr/bin/nmap` to grant Nmap raw socket access without root.
+
+### Permission errors / "winpcap is required" (Windows)
+
+- Run OmniScan from **PowerShell as Administrator** for SYN (`-sS`) and UDP scans, which need raw sockets.
+- If Nmap reports it cannot open devices or find Npcap, re-run the Nmap installer and make sure **Npcap** is installed (it's bundled by default).
+- Basic TCP connect scans (`-sT`) do **not** require elevation.
 
 ---
 
