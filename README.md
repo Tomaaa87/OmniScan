@@ -14,12 +14,12 @@
 
 ## Overview
 
-OmniScan is a desktop vulnerability intelligence platform that combines two analysis modes into a single, modern GUI application:
+OmniScan is a desktop application that brings professional-grade vulnerability intelligence to your fingertips. It combines two analysis modes in one modern, dark-themed interface:
 
-1. **🌐 Network Security Analysis** — **Nmap port scanning**, **CVE correlation via CIRCL's API**, and **AI-powered analysis via DeepSeek**.
-2. **📁 Codebase Security Analysis (SAST)** — a static source-code auditor that recursively scans local projects, bundles them into a context-safe payload, and hands them to a **DeepSeek SAST specialist** for vulnerability detection, OWASP/CWE mapping, and secure-refactoring recommendations.
+1. **🌐 Network Security Analysis** — scan hosts and networks with **Nmap**, correlate discovered services with **known CVEs**, and get **AI-powered analysis** that explains risks and next steps.
+2. **📁 Codebase Security Analysis (SAST)** — point OmniScan at a local project or source file and it audits the code for vulnerabilities, maps findings to **OWASP/CWE**, and suggests **secure refactorings** — all powered by DeepSeek.
 
-Both modes support **Blue Team (defensive/remediation)** and **Red Team (adversary emulation)** operational modes, and the network mode generates professional PDF reports.
+Every analysis can run in **Blue Team** (defensive/remediation) or **Red Team** (adversary emulation) mode, and both modes produce professional **PDF reports**.
 
 ---
 
@@ -27,85 +27,59 @@ Both modes support **Blue Team (defensive/remediation)** and **Red Team (adversa
 
 -  **GUI-Driven Nmap** — 10 built-in scan profiles (SYN scan, full port scan, aggressive scan, UDP, stealth, etc.) with a single click. No terminal commands needed.
 -  **NSE Script Integration** — Select from 7 Nmap Scripting Engine categories (`vuln`, `exploit`, `brute`, `auth`, `discovery`, `safe`, `default`) to run targeted vulnerability detection, exploitation, and enumeration scripts against discovered services. NSE outputs are parsed and displayed in the enriched data view.
--  **Custom Nmap Flags (Absolute Override)** — Enter arbitrary Nmap flags to bypass the scan profile, custom ports, and NSE selector entirely. Full control for power users with built-in shell metacharacter sanitization.
+-  **Custom Nmap Flags (Absolute Override)** — Enter arbitrary Nmap flags to take full manual control, overriding the scan profile, ports, and NSE selector — with safety checks built in.
 -  **Assume Online (`-Pn`) Toggle** — Treat all hosts as online, bypassing host discovery. Toggle it on/off without changing your scan profile.
 -  **Custom Ports** — Override or extend any scan profile's port range with custom values.
 -  **Auto-Detect Network** — One-click detection of your local subnet (`/24`) and automatic scanning of all hosts.
--  **Live CVE Correlation** — Each discovered service is cross-referenced against the CIRCL vulnerability database (NVD 5.2 format). Results are **cached locally in SQLite** to avoid API rate limits on repeat scans.
+-  **Live CVE Correlation** — Every discovered service is checked against the CIRCL vulnerability database for known CVEs. Results are **cached locally** so repeat scans stay fast.
 -  **Dual-Mode AI Analysis** — Toggle between:
   -  **Blue Team Mode** — Root-cause analysis, risk context, and actionable remediation steps (bash commands, firewall rules, config changes).
   -  **Red Team Mode** — Exploit feasibility, PoC availability, MITRE ATT&CK mapping, OWASP classification, and PTES/WSTG methodology references.
 -  **PDF Export** — Generate polished, professional vulnerability intelligence reports with a single click.
--  **Scan History** — All past scans are archived in a local SQLite database. Load, review, and re-analyze any historical scan at any time.
--  **Re-Analyze Button** — Re-run AI analysis on stored scan data after switching between Blue/Red Team modes — no need to re-scan.
+-  **Scan History** — Every scan is saved on your machine. Load, review, and re-analyze any past scan at any time.
+-  **Re-Analyze Button** — Re-run the AI analysis on any saved scan after switching between Blue/Red Team modes — no need to scan again.
 -  **Landing Hero Screen** — On launch you get two interactive cards: **Network Security Analysis** and **Codebase Security Analysis**, with a persistent top navigation bar for one-click mode switching.
 -  **Codebase Security Analysis (SAST)** — A dedicated static-code auditor:
   -  **Target Selector** — Pick a folder or a single source file via native file dialogs.
   -  **Recursive Source Discovery** — Walks your project while automatically skipping non-code directories (`.git`, `node_modules`, `venv`, `__pycache__`, `build`, `dist`).
   -  **13 Language Support** — Parses `.py`, `.js`, `.ts`, `.php`, `.java`, `.cpp`, `.c`, `.cs`, `.go`, `.html`, `.sql`, `.kt`, and `.sh`.
   -  **File Inspector** — Visual list of every discovered source file with line counts and truncation markers.
-  -  **Context-Aware Payload Builder** — Caps large files and truncates excess tokens so the code always fits the AI context window.
+  -  **Built-in Code Viewer** — Click any file in the File Inspector to open its full source directly inside the app — no IDE required. A dedicated **Code Viewer** tab sits alongside the AI report.
+  -  **Smart File Handling** — Large files are trimmed automatically so the AI can analyze the whole project efficiently.
   -  **DeepSeek SAST Specialist** — Severity matrix (Critical/High/Medium/Low), exact file & line identification, OWASP Top 10 + CWE mapping, and secure-refactoring diffs.
   -  **Red Team SAST Mode** — Adds exploitability vectors, bypass techniques, and attack-chain feasibility.
-  -  **Codebase PDF Export** — Generate a professional SAST report (target, payload summary, file inventory, and AI findings) with one click.
+  -  **Codebase PDF Export** — Generate a professional SAST report (target, code summary, file inventory, and AI findings) with one click.
 
 ---
 
-## Architecture
+## How OmniScan Works
 
-OmniScan now ships a three-view GUI — a **Landing hero**, the **Network view**, and the **Codebase (SAST) view** — all tied together by a persistent top navigation bar.
+OmniScan's interface is built around three views — **Home**, **Network Security Analysis**, and **Codebase Security Analysis** — all connected by a persistent top navigation bar, so you can switch modes at any time.
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                  OmniScan GUI (CustomTkinter)                      │
-│  ┌──────────────────────────── Nav Header ───────────────────────┐ │
-│  │  🏠 Home   │  🌐 Network Security Analysis  │  📁 Codebase    │ │
-│  └───────────────────────────────────────────────────────────────┘ │
-│                                                                    │
-│  ┌──────────── Landing Hero ────────────┐                           │
-│  │  [🌐 Network Card]  [📁 Codebase Card]│                         │
-│  └───────────────────────────────────────┘                         │
-│                                                                    │
-│  ┌────────── Network View ──────────┐  ┌────── Codebase View ────┐│
-│  │  Sidebar → Nmap → CVE → AI → PDF │  │ Target → File Inspector ││
-│  │                                   │  │        → SAST AI → View││
-│  └───────────────────────────────────┘  └─────────────────────────┘│
-└────────────────────────────────────────────────────────────────────┘
-```
+### What Happens in Each Analysis
 
-### Backend Pipelines
+**Network analysis:**
+1. OmniScan runs an **Nmap** scan (with optional **NSE scripts**) against your target.
+2. Discovered services are matched against the **CIRCL vulnerability database** to surface known CVEs.
+3. **DeepSeek** analyzes the results in your chosen Blue or Red Team mode.
+4. Results are saved locally and can be exported as a **PDF report**.
 
-**Network pipeline:**
-
-```
-scanner.py           cve_mapper.py        ai_engine.py             export.py
-(python-nmap + NSE) ──▶ (CIRCL API) ──▶ analyze_vulnerabilities ──▶ (fpdf2 PDF)
-                                             │
-                                             ▼
-                                      database.py (SQLite)
-                              scan_history + cve_cache tables
-```
-
-**Codebase (SAST) pipeline:**
-
-```
-code_analyzer.py                     ai_engine.py
-(directory traversal,          ──▶   analyze_codebase()
- language filtering,                 (DeepSeek SAST specialist —
- payload truncation)                  severity matrix, OWASP/CWE,
-                                      secure refactoring)
-```
+**Codebase (SAST) analysis:**
+1. Point OmniScan at a **folder** or a **single source file**.
+2. OmniScan discovers the source files and lets you **preview them in-app**.
+3. A **DeepSeek SAST specialist** audits the code for vulnerabilities and maps findings to OWASP/CWE.
+4. Review the findings and export a professional **PDF report**.
 
 ---
 
 ## Prerequisites
 
-| Dependency | Why |
+| Requirement | What It's For |
 |---|---|
-| **Python 3.10+** | Required by CustomTkinter and async features |
-| **Nmap** | The actual port scanner (called via `python-nmap`) |
-| **DejaVu Fonts** | Needed for Unicode PDF rendering |
-| **DeepSeek API Key** | Powers the AI analysis engine |
+| **Python 3.10+** | The runtime OmniScan runs on |
+| **Nmap** | Performs the actual port scanning |
+| **DejaVu Fonts** | Needed to render PDF reports (Linux) |
+| **DeepSeek API Key** | Powers the AI analysis |
 
 ### System Packages (Debian/Ubuntu/Kali)
 
@@ -204,8 +178,8 @@ On launch, OmniScan presents a **hero landing screen** with two interactive card
 
 | Card | What It Does |
 |---|---|
-| **🌐 Network Security Analysis** | Opens the classic OmniScan Nmap interface (sidebar + scan tabs). |
-| **📁 Codebase Security Analysis** | Opens the new static source-code audit (SAST) interface. |
+| **🌐 Network Security Analysis** | Scan hosts, map CVEs, and get AI-driven analysis of your network. |
+| **📁 Codebase Security Analysis** | Audit your source code for vulnerabilities with AI-powered analysis. |
 
 A **persistent navigation header** stays at the top of every view, letting you jump between **Home**, **Network Security Analysis**, and **Codebase Security Analysis** at any time — without resetting active scan or analysis state.
 
@@ -220,7 +194,7 @@ A **persistent navigation header** stays at the top of every view, letting you j
 | **NSE Scripts Category** | Select an NSE category to run (`vuln`, `exploit`, `brute`, `auth`, `discovery`, `safe`, `default`) |
 | **Custom Nmap Flags** | Enter arbitrary flags to bypass the profile/NSE/ports selectors entirely (absolute override) |
 | **Assume Online (-Pn)** | Toggle ON to skip host discovery (treat all hosts as alive) |
-| **Initiate Scan** | Starts the full pipeline (Nmap → CVE → AI) |
+| **Initiate Scan** | Runs the complete scan — Nmap, CVE lookup, and AI analysis |
 | **Blue/Red Team Switch** | Toggle between defensive and offensive analysis modes |
 | **Re-analyze with AI** | Re-runs only the AI phase on stored scan data with the current mode |
 | **Generate PDF Report** | Exports a professional PDF (enabled after scan completes) |
@@ -284,39 +258,40 @@ When the **Custom Nmap Flags** field is non-empty, it **completely replaces** th
 
 ### Codebase Security Analysis (SAST)
 
-The **Codebase Security Analysis** view performs static source-code auditing using a DeepSeek-powered *Senior Application Security Auditor (SAST Specialist)* persona.
+The **Codebase Security Analysis** view audits your source code for security weaknesses, powered by a DeepSeek *Senior Application Security Auditor*.
 
 **Interface layout:**
 
 | Element | Purpose |
 |---|---|
 | **Target Selector** | Browse a **folder** or a **single file** with native file dialogs; the selected path appears in the text box |
-| **File Inspector** | Visual list of every discovered source file with relative path, line count, and a ✂ marker when a file was truncated |
-| **Start Analysis** | Kicks off the SAST audit on a background thread |
-| **Export PDF** | Saves a professional codebase security report (enabled after analysis completes) |
+| **File Inspector** | Visual list of every discovered source file with relative path, line count, and a ✂ marker when a file was truncated — **click any entry to open its full source in the Code Viewer** |
+| **Start Analysis** | Begins the AI-powered security audit of your code |
+| **Export PDF** | Saves a professional codebase security report — target, code summary, file inventory, and AI findings (enabled after analysis completes) |
 | **Blue/Red Team Switch** | Toggles between defensive SAST and adversary-emulation SAST output |
-| **Output Viewer** | Read-only Markdown report — highlight and copy allowed, editing blocked |
+| **Output Viewer** | Two read-only tabs — **AI Report** (Markdown findings) and **Code Viewer** (full source of the selected file) — highlight and copy allowed, editing blocked |
 
 **Codebase analysis workflow:**
 
 1. Click **"📂 Browse Folder"** (or **"📄 Browse File"** for a single source file).
 2. Review the discovered files in the **File Inspector**.
-3. Optionally toggle **🔴 Red Team Mode**.
-4. Click **"Start Analysis"** — an indeterminate progress bar runs while DeepSeek processes the payload.
-5. Read the report in the output viewer: a **severity matrix**, **file & line identifications**, **OWASP Top 10 + CWE mappings**, and **secure-refactoring diffs** (plus exploitability/attack-chain analysis in Red Team mode).
-6. Click **"Export PDF"** to save a professional report containing the target, payload summary, file inventory, and AI findings.
+3. Click any file in the **File Inspector** to open its full source in the **Code Viewer** tab — review code without leaving OmniScan.
+4. Optionally toggle **🔴 Red Team Mode**.
+5. Click **"Start Analysis"** — a progress bar appears while the AI audits your code.
+6. Read the report in the **AI Report** tab: a **severity matrix**, **file & line identifications**, **OWASP Top 10 + CWE mappings**, and **secure-refactoring diffs** (plus exploitability/attack-chain analysis in Red Team mode).
+7. Click **"Export PDF"** to save a professional report containing the target, code summary, file inventory, and AI findings.
 
 **Supported languages:** Python (`.py`), JavaScript (`.js`), TypeScript (`.ts`), PHP (`.php`), Java (`.java`), C++ (`.cpp`), C (`.c`), C# (`.cs`), Go (`.go`), HTML (`.html`), SQL (`.sql`), Kotlin (`.kt`), and Shell (`.sh`).
 
-**Auto-ignored directories:** `.git`, `node_modules`, `venv`, `__pycache__`, `build`, and `dist` are skipped during traversal so you never upload dependency or build noise to the AI.
+**Auto-ignored directories:** `.git`, `node_modules`, `venv`, `__pycache__`, `build`, and `dist` are skipped automatically, so dependency and build folders never slow down or clutter your analysis.
 
-**Context-window safety:** the `CodeAnalyzer` caps each file at 12,000 characters and the whole payload at 120,000 characters, truncating excess content so the request always fits the DeepSeek context window.
+**Large-project safety:** very large files are trimmed automatically so the analysis stays fast and within limits, while still covering the files that matter.
 
 ---
 
-## Caching & Database
+## Your Data Stays Local
 
-OmniScan uses SQLite (`data/omniscan.db`) with two tables:
+OmniScan stores everything on your own machine in a small SQLite database (`data/omniscan.db`). The only data sent over the internet is the target or code you choose to submit for AI analysis. Two kinds of records are kept:
 
 ### `cve_cache` — Product-Level CVE Cache
 
@@ -346,26 +321,24 @@ OmniScan uses SQLite (`data/omniscan.db`) with two tables:
 
 ---
 
-## Project Structure
+## Project Layout (for contributors)
 
 ```
 ommiscan/
-├── README.md                  ← You are here
+├── README.md                  ← This file
 ├── requirments.txt            ← Python dependencies
 ├── .gitignore                 ← Excludes .env, venv, *.db, __pycache__
-├── .env                       ← DeepSeek API key (gitignored — create your own)
-├── data/                      ← SQLite database (gitignored)
-├── reports/                   ← Exported PDF reports (gitignored)
-├── zapush.txt                 ← Development notes
-├── zarun.txt                  ← Development notes
+├── .env                       ← Your DeepSeek API key (never committed)
+├── data/                      ← Local SQLite database
+├── reports/                   ← Exported PDF reports
 └── src/
-    ├── main.py                ← CustomTkinter GUI (landing, network, codebase views + orchestrator)
-    ├── scanner.py             ← Async Nmap wrapper (python-nmap)
-    ├── cve_mapper.py          ← CIRCL API client + CVE enrichment logic
-    ├── ai_engine.py           ← DeepSeek API client (network + SAST prompts, Blue/Red Team)
-    ├── code_analyzer.py       ← Source-code discovery & AI payload builder (SAST)
-    ├── database.py            ← SQLite manager (scan history + CVE cache)
-    └── export.py              ← PDF report generator (fpdf2)
+    ├── main.py                ← Application interface (Home, Network, Codebase views)
+    ├── scanner.py             ← Nmap scanning
+    ├── cve_mapper.py          ← CVE lookup & enrichment
+    ├── ai_engine.py           ← DeepSeek integration (Blue/Red Team)
+    ├── code_analyzer.py       ← Source-code discovery for SAST
+    ├── database.py            ← Local data storage
+    └── export.py              ← PDF report generation
 ```
 
 ---

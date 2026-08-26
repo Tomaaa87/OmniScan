@@ -568,16 +568,37 @@ class OmniScanGUI(ctk.CTk):
         )
         self.file_tree.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="nsew")
 
-        # ---------------- Right: output viewer ----------------
-        self.code_output_box = ctk.CTkTextbox(
+        # ---------------- Right: output viewer (tabs) ----------------
+        self.code_tabview = ctk.CTkTabview(
             self.codebase_frame,
+            fg_color="#181818",
+            segmented_button_selected_color="#333333",
+        )
+        self.code_tabview.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+
+        self.code_tabview.add("AI Report")
+        self.code_tabview.add("Code Viewer")
+
+        self.code_output_box = ctk.CTkTextbox(
+            self.code_tabview.tab("AI Report"),
             font=("Consolas", 13),
             fg_color="#111111",
             text_color="#FFFFFF",
             wrap="word",
         )
-        self.code_output_box.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        self.code_output_box.pack(expand=True, fill="both", padx=5, pady=5)
         self.code_output_box.bind("<Key>", self._block_edit_keys)
+
+        self.code_viewer_box = ctk.CTkTextbox(
+            self.code_tabview.tab("Code Viewer"),
+            font=("Consolas", 13),
+            fg_color="#111111",
+            text_color="#FFFFFF",
+            wrap="none",
+        )
+        self.code_viewer_box.pack(expand=True, fill="both", padx=5, pady=5)
+        self.code_viewer_box.bind("<Key>", self._block_edit_keys)
+        self.code_viewer_box.insert(ctk.END, "Select a file in the File Inspector to view its source code here.")
 
     def browse_codebase_folder(self):
         path = filedialog.askdirectory(title="Select Codebase Directory")
@@ -617,6 +638,8 @@ class OmniScanGUI(ctk.CTk):
         self.codebase_report = ""
         self.code_export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF")
         self.code_output_box.delete("1.0", ctk.END)
+        self.code_viewer_box.delete("1.0", ctk.END)
+        self.code_tabview.set("AI Report")
 
     def _clear_file_tree(self):
         for widget in self.codebase_file_widgets:
@@ -637,16 +660,32 @@ class OmniScanGUI(ctk.CTk):
                     rel = f["path"]
 
             marker = " ✂" if f.get("truncated") else ""
-            label = ctk.CTkLabel(
+            file_btn = ctk.CTkButton(
                 self.file_tree,
                 text=f"📄 {rel}  ({f['lines']} lines){marker}",
                 anchor="w",
-                justify="left",
-                font=ctk.CTkFont(size=12),
+                command=lambda p=f["path"]: self._view_code_file(p),
+                fg_color="transparent",
+                hover_color="#2A2A2A",
                 text_color="#DDDDDD",
+                font=ctk.CTkFont(size=12),
+                height=24,
+                corner_radius=4,
             )
-            label.pack(fill="x", padx=8, pady=1)
-            self.codebase_file_widgets.append(label)
+            file_btn.pack(fill="x", padx=4, pady=1)
+            self.codebase_file_widgets.append(file_btn)
+
+    def _view_code_file(self, path: str):
+        """Loads the full source of the selected file into the Code Viewer tab."""
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except OSError as exc:
+            content = f"[!] Could not read file: {exc}"
+
+        self.code_viewer_box.delete("1.0", ctk.END)
+        self.code_viewer_box.insert(ctk.END, content)
+        self.code_tabview.set("Code Viewer")
 
     def _on_code_red_toggle(self):
         if self.codebase_red_var.get():
@@ -666,6 +705,7 @@ class OmniScanGUI(ctk.CTk):
         self.code_progress.grid()
         self.code_progress.start()
         self.code_output_box.delete("1.0", ctk.END)
+        self.code_tabview.set("AI Report")
 
         threading.Thread(target=self._code_analysis_target, args=(red_team,), daemon=True).start()
 
