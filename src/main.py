@@ -14,6 +14,7 @@ from cve_mapper import CVEMapper
 from ai_engine import AIEngine
 from export import PDFExportEngine
 from database import DatabaseManager
+from code_analyzer import CodeAnalyzer
 
 # Load environment variables (.env)
 load_dotenv()
@@ -27,14 +28,19 @@ class OmniScanGUI(ctk.CTk):
         super().__init__()
 
         self.title("OmniScan - Vulnerability Intelligence Platform")
-        self.geometry("1100x700")
-        
+        self.geometry("1200x760")
+
+        # Root layout: row 0 = persistent nav header, row 1 = active view
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
         # Initialize backend modules
         self.scanner = OmniScanner()
         self.mapper = CVEMapper()
         self.ai = AIEngine()
         self.exporter = PDFExportEngine()
         self.db = DatabaseManager()
+        self.code_analyzer = CodeAnalyzer()
 
         # State variables to hold data for the PDF and re-analysis
         self.current_ip = ""
@@ -65,15 +71,122 @@ class OmniScanGUI(ctk.CTk):
             "Stealth SYN (-sS -T4 -f)":        "-sS -T4 -f",
         }
 
-        self._build_ui()
+        # --- Codebase (SAST) state ---
+        self.codebase_path_var = ctk.StringVar(value="")
+        self.codebase_target = None          # selected directory or single file path
+        self.codebase_payload = None         # structured payload from CodeAnalyzer
+        self.codebase_report = ""            # latest SAST AI report
+        self.codebase_red_var = ctk.BooleanVar(value=False)
+        self.codebase_file_widgets = []      # file-tree labels for easy clearing
+        self.nav_buttons = {}                # key -> navigation header button
 
-    def _build_ui(self):
+        # Build all three views plus the persistent navigation header
+        self._build_nav_header()
+        self._build_landing_frame()
+        self._build_network_frame()
+        self._build_codebase_frame()
+
+        # Launch into the hero landing screen
+        self.show_landing()
+
+    def _build_nav_header(self):
+        """Persistent top navigation bar (always visible, mode-agnostic)."""
+        self.nav_frame = ctk.CTkFrame(self, height=56, corner_radius=0, fg_color="#111111")
+        self.nav_frame.grid(row=0, column=0, sticky="ew")
+        self.nav_frame.grid_columnconfigure(0, weight=1)
+
+        nav_logo = ctk.CTkLabel(
+            self.nav_frame,
+            text="OmniScan",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#FFFFFF",
+        )
+        nav_logo.grid(row=0, column=0, padx=20, pady=12, sticky="w")
+
+        def _mk_nav(key, text, command):
+            btn = ctk.CTkButton(
+                self.nav_frame,
+                text=text,
+                command=command,
+                fg_color="transparent",
+                text_color="#AAAAAA",
+                hover_color="#222222",
+                font=ctk.CTkFont(size=13, weight="bold"),
+                height=32,
+            )
+            self.nav_buttons[key] = btn
+            return btn
+
+        _mk_nav("home", "🏠 Home", self.show_landing).grid(row=0, column=1, padx=4)
+        _mk_nav("network", "🌐 Network Security Analysis", self.show_network).grid(row=0, column=2, padx=4)
+        _mk_nav("codebase", "📁 Codebase Security Analysis", self.show_codebase).grid(row=0, column=3, padx=(4, 20))
+
+    def _build_landing_frame(self):
+        """Modern hero landing screen with two interactive card buttons."""
+        self.landing_frame = ctk.CTkFrame(self, fg_color="#181818")
+        self.landing_frame.grid(row=1, column=0, sticky="nsew")
+        self.landing_frame.grid_columnconfigure(0, weight=1)
+        self.landing_frame.grid_rowconfigure(0, weight=1)
+
+        hero = ctk.CTkFrame(self.landing_frame, fg_color="transparent")
+        hero.grid(row=0, column=0, padx=80, pady=80, sticky="nsew")
+        hero.grid_columnconfigure(0, weight=1)
+
+        title = ctk.CTkLabel(
+            hero,
+            text="OmniScan",
+            font=ctk.CTkFont(size=52, weight="bold"),
+            text_color="#FFFFFF",
+        )
+        title.grid(row=0, column=0, pady=(0, 8))
+
+        subtitle = ctk.CTkLabel(
+            hero,
+            text="Vulnerability Intelligence Platform — choose your analysis mode",
+            font=ctk.CTkFont(size=16),
+            text_color="#AAAAAA",
+        )
+        subtitle.grid(row=1, column=0, pady=(0, 48))
+
+        cards = ctk.CTkFrame(hero, fg_color="transparent")
+        cards.grid(row=2, column=0, sticky="nsew")
+        cards.grid_columnconfigure((0, 1), weight=1, uniform="cards")
+
+        network_card = ctk.CTkButton(
+            cards,
+            text="🌐  Network Security Analysis\n\nNmap scanning, CVE mapping\nand AI-powered intelligence.",
+            command=self.show_network,
+            height=220,
+            corner_radius=16,
+            fg_color="#1E3A5F",
+            hover_color="#2A4F7F",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#FFFFFF",
+        )
+        network_card.grid(row=0, column=0, padx=12, pady=12, sticky="nsew")
+
+        codebase_card = ctk.CTkButton(
+            cards,
+            text="📁  Codebase Security Analysis\n\nStatic source-code audit\npowered by DeepSeek SAST.",
+            command=self.show_codebase,
+            height=220,
+            corner_radius=16,
+            fg_color="#1F3D2B",
+            hover_color="#2C543D",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#FFFFFF",
+        )
+        codebase_card.grid(row=0, column=1, padx=12, pady=12, sticky="nsew")
+
+    def _build_network_frame(self):
         # Configure grid layout (1 row, 2 columns)
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.network_frame = ctk.CTkFrame(self, fg_color="#181818")
+        self.network_frame.grid(row=1, column=0, sticky="nsew")
+        self.network_frame.grid_columnconfigure(1, weight=1)
+        self.network_frame.grid_rowconfigure(0, weight=1)
 
         # ================= Sidebar =================
-        self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color="#111111")
+        self.sidebar_frame = ctk.CTkFrame(self.network_frame, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
         # Shifted the weight down to row 16 to account for mode switch, re-analyze, -Pn, NSE, custom flags, and progress bar
@@ -276,7 +389,7 @@ class OmniScanGUI(ctk.CTk):
         self.refresh_history_dropdown()
 
         # ================= Main View =================
-        self.tabview = ctk.CTkTabview(self, fg_color="#181818", segmented_button_selected_color="#333333")
+        self.tabview = ctk.CTkTabview(self.network_frame, fg_color="#181818", segmented_button_selected_color="#333333")
         self.tabview.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
         
         self.tabview.add("Terminal Logs")
@@ -296,6 +409,375 @@ class OmniScanGUI(ctk.CTk):
         self.terminal_box.bind("<Key>", self._block_edit_keys)
         self.cve_box.bind("<Key>", self._block_edit_keys)
         self.ai_box.bind("<Key>", self._block_edit_keys)
+
+    # ================= Navigation / View Switching =================
+    def show_landing(self):
+        self.network_frame.grid_remove()
+        self.codebase_frame.grid_remove()
+        self.landing_frame.grid(row=1, column=0, sticky="nsew")
+        self._set_active_nav("home")
+
+    def show_network(self):
+        self.landing_frame.grid_remove()
+        self.codebase_frame.grid_remove()
+        self.network_frame.grid(row=1, column=0, sticky="nsew")
+        self._set_active_nav("network")
+
+    def show_codebase(self):
+        self.landing_frame.grid_remove()
+        self.network_frame.grid_remove()
+        self.codebase_frame.grid(row=1, column=0, sticky="nsew")
+        self._set_active_nav("codebase")
+
+    def _set_active_nav(self, active: str):
+        """Highlights the active nav button; leaves others dimmed."""
+        for key, btn in self.nav_buttons.items():
+            if key == active:
+                btn.configure(fg_color="#1E3A5F", text_color="#FFFFFF")
+            else:
+                btn.configure(fg_color="transparent", text_color="#AAAAAA")
+
+    # ================= Codebase (SAST) View =================
+    def _build_codebase_frame(self):
+        """New SAST interface: target selector, file tree, scan controls, output viewer."""
+        self.codebase_frame = ctk.CTkFrame(self, fg_color="#181818")
+        self.codebase_frame.grid(row=1, column=0, sticky="nsew")
+        self.codebase_frame.grid_columnconfigure(1, weight=1)
+        self.codebase_frame.grid_rowconfigure(0, weight=1)
+
+        # ---------------- Left control panel ----------------
+        self.code_panel = ctk.CTkFrame(self.codebase_frame, width=380, corner_radius=0, fg_color="#111111")
+        self.code_panel.grid(row=0, column=0, sticky="nsew")
+        self.code_panel.grid_columnconfigure(0, weight=1)
+        self.code_panel.grid_rowconfigure(8, weight=1)  # file tree expands
+
+        ctk.CTkLabel(
+            self.code_panel,
+            text="Target Selector",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#FFFFFF",
+        ).grid(row=0, column=0, padx=20, pady=(20, 5), sticky="w")
+
+        self.codebase_path_entry = ctk.CTkEntry(
+            self.code_panel,
+            textvariable=self.codebase_path_var,
+            placeholder_text="Select a folder or single source file...",
+            fg_color="#222222",
+            border_color="#555555",
+        )
+        self.codebase_path_entry.grid(row=1, column=0, padx=20, pady=(0, 8), sticky="ew")
+
+        browse_row = ctk.CTkFrame(self.code_panel, fg_color="transparent")
+        browse_row.grid(row=2, column=0, padx=20, pady=(0, 8), sticky="ew")
+        browse_row.grid_columnconfigure((0, 1), weight=1)
+
+        self.code_browse_folder_btn = ctk.CTkButton(
+            browse_row,
+            text="📂 Browse Folder",
+            command=self.browse_codebase_folder,
+            fg_color="#333333",
+            hover_color="#555555",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self.code_browse_folder_btn.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+
+        self.code_browse_file_btn = ctk.CTkButton(
+            browse_row,
+            text="📄 Browse File",
+            command=self.browse_codebase_file,
+            fg_color="#333333",
+            hover_color="#555555",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self.code_browse_file_btn.grid(row=0, column=1, padx=(4, 0), sticky="ew")
+
+        # ---------------- Scan controls ----------------
+        action_row = ctk.CTkFrame(self.code_panel, fg_color="transparent")
+        action_row.grid(row=3, column=0, padx=20, pady=(10, 8), sticky="ew")
+        action_row.grid_columnconfigure((0, 1), weight=1)
+
+        self.code_start_button = ctk.CTkButton(
+            action_row,
+            text="Start Analysis",
+            command=self.start_code_analysis_thread,
+            fg_color="#FFFFFF",
+            text_color="#000000",
+            hover_color="#CCCCCC",
+            font=ctk.CTkFont(weight="bold"),
+        )
+        self.code_start_button.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+
+        self.code_export_button = ctk.CTkButton(
+            action_row,
+            text="Export PDF",
+            command=self.export_codebase_pdf,
+            fg_color="#333333",
+            text_color="#FFFFFF",
+            hover_color="#555555",
+            font=ctk.CTkFont(weight="bold"),
+            state="disabled",
+        )
+        self.code_export_button.grid(row=0, column=1, padx=(4, 0), sticky="ew")
+
+        self.code_red_switch = ctk.CTkSwitch(
+            self.code_panel,
+            text="🔵 Blue Team Mode",
+            variable=self.codebase_red_var,
+            command=self._on_code_red_toggle,
+            onvalue=True,
+            offvalue=False,
+            fg_color="#1E3A5F",
+            progress_color="#8B0000",
+            button_color="#FFFFFF",
+            button_hover_color="#CCCCCC",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self.code_red_switch.grid(row=4, column=0, padx=20, pady=(0, 8), sticky="w")
+
+        self.code_progress = ctk.CTkProgressBar(
+            self.code_panel,
+            mode="indeterminate",
+            height=12,
+            fg_color="#222222",
+            progress_color="#FFFFFF",
+            corner_radius=6,
+        )
+        self.code_progress.grid(row=5, column=0, padx=20, pady=(0, 8), sticky="ew")
+        self.code_progress.grid_remove()
+
+        self.code_status_label = ctk.CTkLabel(
+            self.code_panel,
+            text="Status: Idle",
+            text_color="#888888",
+            font=ctk.CTkFont(size=12),
+        )
+        self.code_status_label.grid(row=6, column=0, padx=20, pady=(0, 5), sticky="w")
+
+        # ---------------- File tree / inspector ----------------
+        ctk.CTkLabel(
+            self.code_panel,
+            text="File Inspector",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#FFFFFF",
+        ).grid(row=7, column=0, padx=20, pady=(10, 5), sticky="w")
+
+        self.file_tree = ctk.CTkScrollableFrame(
+            self.code_panel,
+            fg_color="#181818",
+            corner_radius=8,
+        )
+        self.file_tree.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="nsew")
+
+        # ---------------- Right: output viewer (tabs) ----------------
+        self.code_tabview = ctk.CTkTabview(
+            self.codebase_frame,
+            fg_color="#181818",
+            segmented_button_selected_color="#333333",
+        )
+        self.code_tabview.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+
+        self.code_tabview.add("AI Report")
+        self.code_tabview.add("Code Viewer")
+
+        self.code_output_box = ctk.CTkTextbox(
+            self.code_tabview.tab("AI Report"),
+            font=("Consolas", 13),
+            fg_color="#111111",
+            text_color="#FFFFFF",
+            wrap="word",
+        )
+        self.code_output_box.pack(expand=True, fill="both", padx=5, pady=5)
+        self.code_output_box.bind("<Key>", self._block_edit_keys)
+
+        self.code_viewer_box = ctk.CTkTextbox(
+            self.code_tabview.tab("Code Viewer"),
+            font=("Consolas", 13),
+            fg_color="#111111",
+            text_color="#FFFFFF",
+            wrap="none",
+        )
+        self.code_viewer_box.pack(expand=True, fill="both", padx=5, pady=5)
+        self.code_viewer_box.bind("<Key>", self._block_edit_keys)
+        self.code_viewer_box.insert(ctk.END, "Select a file in the File Inspector to view its source code here.")
+
+    def browse_codebase_folder(self):
+        path = filedialog.askdirectory(title="Select Codebase Directory")
+        if path:
+            self._set_codebase_target(path)
+
+    def browse_codebase_file(self):
+        path = filedialog.askopenfilename(
+            title="Select Source File",
+            filetypes=[("Source Files", "*.*"), ("All Files", "*.*")],
+        )
+        if path:
+            self._set_codebase_target(path)
+
+    def _set_codebase_target(self, path: str):
+        """Indexes the selected target and populates the file inspector."""
+        self.codebase_target = path
+        self.codebase_path_var.set(path)
+        self.code_status_label.configure(text="Status: Indexing files...")
+
+        payload = self.code_analyzer.scan_target(path)
+        if "error" in payload:
+            self.code_status_label.configure(text="Status: Error")
+            self.code_output_box.delete("1.0", ctk.END)
+            self.code_output_box.insert(ctk.END, f"[!] {payload['error']}\n")
+            self._clear_file_tree()
+            self.codebase_payload = None
+            return
+
+        self.codebase_payload = payload
+        self._populate_file_tree(payload)
+        self.code_status_label.configure(
+            text=f"Status: Ready — {payload['file_count']} file(s), {payload['total_lines']} lines"
+        )
+
+        # A new target invalidates the previous report/export
+        self.codebase_report = ""
+        self.code_export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF")
+        self.code_output_box.delete("1.0", ctk.END)
+        self.code_viewer_box.delete("1.0", ctk.END)
+        self.code_tabview.set("AI Report")
+
+    def _clear_file_tree(self):
+        for widget in self.codebase_file_widgets:
+            widget.destroy()
+        self.codebase_file_widgets.clear()
+
+    def _populate_file_tree(self, payload: dict):
+        """Renders the discovered source files as a visual list."""
+        self._clear_file_tree()
+        target = payload.get("target", "")
+
+        for f in payload.get("files", []):
+            rel = f["path"]
+            if target:
+                try:
+                    rel = os.path.relpath(f["path"], target)
+                except ValueError:
+                    rel = f["path"]
+
+            marker = " ✂" if f.get("truncated") else ""
+            file_btn = ctk.CTkButton(
+                self.file_tree,
+                text=f"📄 {rel}  ({f['lines']} lines){marker}",
+                anchor="w",
+                command=lambda p=f["path"]: self._view_code_file(p),
+                fg_color="transparent",
+                hover_color="#2A2A2A",
+                text_color="#DDDDDD",
+                font=ctk.CTkFont(size=12),
+                height=24,
+                corner_radius=4,
+            )
+            file_btn.pack(fill="x", padx=4, pady=1)
+            self.codebase_file_widgets.append(file_btn)
+
+    def _view_code_file(self, path: str):
+        """Loads the full source of the selected file into the Code Viewer tab."""
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except OSError as exc:
+            content = f"[!] Could not read file: {exc}"
+
+        self.code_viewer_box.delete("1.0", ctk.END)
+        self.code_viewer_box.insert(ctk.END, content)
+        self.code_tabview.set("Code Viewer")
+
+    def _on_code_red_toggle(self):
+        if self.codebase_red_var.get():
+            self.code_red_switch.configure(text="🔴 Red Team Mode")
+        else:
+            self.code_red_switch.configure(text="🔵 Blue Team Mode")
+
+    def start_code_analysis_thread(self):
+        if not self.codebase_payload:
+            self.code_output_box.delete("1.0", ctk.END)
+            self.code_output_box.insert(ctk.END, "[!] No codebase selected. Browse for a folder or file first.\n")
+            return
+
+        red_team = self.codebase_red_var.get()
+        self.code_start_button.configure(state="disabled", text="Analyzing...")
+        self.code_status_label.configure(text="Status: Analyzing with DeepSeek...")
+        self.code_progress.grid()
+        self.code_progress.start()
+        self.code_output_box.delete("1.0", ctk.END)
+        self.code_tabview.set("AI Report")
+
+        threading.Thread(target=self._code_analysis_target, args=(red_team,), daemon=True).start()
+
+    def _code_analysis_target(self, red_team: bool):
+        """Runs the SAST AI analysis off the UI thread; defers updates via self.after()."""
+        try:
+            report = self.ai.analyze_codebase(self.codebase_payload, red_team_mode=red_team)
+            self.after(0, self._on_code_analysis_complete, report, red_team)
+        except Exception as e:
+            self.after(0, self._on_code_analysis_error, str(e), red_team)
+
+    def _on_code_analysis_complete(self, report: str, red_team: bool):
+        self.code_progress.stop()
+        self.code_progress.grid_remove()
+        self.code_output_box.insert(ctk.END, report)
+        self.codebase_report = report
+        self.code_start_button.configure(state="normal", text="Start Analysis")
+        self.code_export_button.configure(state="normal", fg_color="#FFFFFF", text_color="#000000")
+        mode_label = "RED TEAM" if red_team else "BLUE TEAM"
+        self.code_status_label.configure(text=f"Status: Analysis complete ({mode_label} mode)")
+
+    def _on_code_analysis_error(self, error_msg: str, red_team: bool):
+        self.code_progress.stop()
+        self.code_progress.grid_remove()
+        self.code_output_box.insert(ctk.END, f"[!] Codebase Analysis Error: {error_msg}\n")
+        self.code_start_button.configure(state="normal", text="Start Analysis")
+        self.code_status_label.configure(text="Status: Analysis Failed")
+
+    def export_codebase_pdf(self):
+        """Exports the current codebase SAST report to a professional PDF."""
+        if not self.codebase_report:
+            self.code_status_label.configure(text="Status: No report to export")
+            self.code_output_box.insert(ctk.END, "\n[!] No codebase analysis to export. Run an analysis first.\n")
+            return
+
+        # Build a smart default filename from the target name and mode
+        safe = os.path.basename(os.path.abspath(self.codebase_target or "codebase"))
+        for ch in ['\\', '/', ':', '.', ' ', '*', '?', '"', '<', '>', '|']:
+            safe = safe.replace(ch, '_')
+        mode_label = "RedTeam" if self.codebase_red_var.get() else "BlueTeam"
+        date_str = datetime.now().strftime("%Y%m%d")
+        default_filename = f"OmniScan_Codebase_{safe}_{mode_label}_{date_str}.pdf"
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")],
+            initialfile=default_filename,
+            title="Export Codebase Analysis Report",
+        )
+
+        if not file_path:
+            self.code_status_label.configure(text="Status: Export Cancelled")
+            return
+
+        self.code_status_label.configure(text="Status: Generating PDF...")
+        try:
+            filepath = self.exporter.generate_codebase_pdf(
+                self.codebase_payload or {},
+                self.codebase_report,
+                red_team_mode=self.codebase_red_var.get(),
+                file_path=file_path,
+            )
+            self.code_status_label.configure(text="Status: PDF Saved")
+            self.code_output_box.insert(ctk.END, f"\n[+] PDF report saved to -> {filepath}\n")
+        except Exception as e:
+            import traceback
+            self.code_status_label.configure(text="Status: Export Failed")
+            self.code_output_box.insert(
+                ctk.END,
+                f"\n[!] PDF Generation Error: {str(e)}\n"
+                f"[!] Full traceback:\n{traceback.format_exc()}\n",
+            )
 
     def _block_edit_keys(self, event):
         """Block editing keystrokes but allow copy, select-all, and navigation."""

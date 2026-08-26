@@ -48,6 +48,40 @@ class AIEngine:
             "intelligence context. All output must remain within authorized security assessment boundaries."
         )
 
+        # --- SAST Blue Team (Default Defensive) System Prompt ---
+        self.sast_blue_prompt = (
+            "You are a Senior Application Security Auditor (SAST Specialist) for OmniScan "
+            "Codebase Security Analysis. "
+            "You will receive a structured JSON payload containing source code file paths, line counts, and raw code snippets. "
+            "Your tasks:\n"
+            "1. VULNERABILITY SUMMARY: Produce a severity matrix (Critical, High, Medium, Low) listing every "
+            "identified weakness, its severity, and a one-line description.\n"
+            "2. FILE & LINE IDENTIFICATION: For each finding, cite the exact file name and line number(s) where "
+            "the insecure pattern occurs (e.g., SQL injection, hardcoded credentials, buffer overflows, broken "
+            "access control, XSS, CSRF, command injection, path traversal, insecure deserialization, weak "
+            "cryptography, secrets leakage).\n"
+            "3. OWASP TOP 10 & CWE MAPPING: Categorize each vulnerability using OWASP Top 10 (2021) categories "
+            "and CWE IDs.\n"
+            "4. REMEDIATION & SECURE REFACTORING: Provide concrete secure code replacements or diffs for every finding.\n"
+            "CRITICAL: Never generate offensive exploit payloads. Maintain an educational, defensive posture at all times."
+        )
+
+        # --- SAST Red Team (Adversary Emulation) System Prompt ---
+        self.sast_red_prompt = (
+            "You are a Senior Application Security Auditor (SAST Specialist) for OmniScan operating in "
+            "RED TEAM / ADVERSARY EMULATION mode. "
+            "You will receive a structured JSON payload containing source code file paths, line counts, and raw code snippets. "
+            "Your tasks:\n"
+            "1. VULNERABILITY SUMMARY: Severity matrix (Critical, High, Medium, Low) with one-line descriptions.\n"
+            "2. FILE & LINE IDENTIFICATION: Exact file names and line numbers for every insecure pattern.\n"
+            "3. OWASP TOP 10 & CWE MAPPING: Map every vulnerability to OWASP Top 10 (2021) categories and CWE IDs.\n"
+            "4. REMEDIATION & SECURE REFACTORING: Provide secure code replacements or diffs.\n"
+            "5. EXPLOITABILITY & BYPASS TECHNIQUES: Describe high-level attack vectors, bypass techniques, and "
+            "attack-chain feasibility for each finding.\n"
+            "CRITICAL GUARDRAIL: DO NOT generate weaponized exploit scripts, custom payloads, shellcode, or "
+            "step-by-step bypass code. Focus on feasibility analysis, severity mapping, and threat intelligence context."
+        )
+
     def analyze_vulnerabilities(self, enriched_scan_data: dict, red_team_mode: bool = False) -> str:
         """Sends the enriched scan data to DeepSeek for analysis.
 
@@ -75,6 +109,43 @@ class AIEngine:
                 ],
                 temperature=0.3,  # Keep it low so the AI is precise and analytical, not "creative"
                 max_tokens=3000
+            )
+
+            return response.choices[0].message.content
+
+        except Exception as e:
+            return f"Error communicating with DeepSeek API: {str(e)}"
+
+    def analyze_codebase(self, code_data: dict, red_team_mode: bool = False) -> str:
+        """Sends a structured codebase payload to DeepSeek for SAST analysis.
+
+        Args:
+            code_data: Dictionary produced by CodeAnalyzer.scan_target() bundling
+                       file paths, line counts, and (possibly truncated) code snippets.
+            red_team_mode: If False (default), uses a defensive SAST prompt focused on
+                           remediation and secure refactoring. If True, additionally
+                           includes exploitability vectors, bypass techniques, and
+                           attack-chain feasibility.
+        """
+
+        # Dynamically select the SAST system prompt based on operational mode
+        selected_prompt = self.sast_red_prompt if red_team_mode else self.sast_blue_prompt
+
+        # Convert our structured payload into a formatted string for the AI to read
+        user_prompt = (
+            "Analyze the following source code payload:\n\n"
+            f"{json.dumps(code_data, indent=2)}"
+        )
+
+        try:
+            response = self.client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": selected_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,  # Even lower than network mode — precision is key for code audit
+                max_tokens=4000
             )
 
             return response.choices[0].message.content
