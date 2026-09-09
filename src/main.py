@@ -14,6 +14,7 @@ from ai_engine import AIEngine
 from export import PDFExportEngine
 from database import DatabaseManager
 from code_analyzer import CodeAnalyzer
+from dependency_scanner import DependencyScanner
 
 # Load environment variables (.env)
 load_dotenv()
@@ -49,6 +50,7 @@ class OmniScanGUI(ctk.CTk):
         self.exporter = PDFExportEngine()
         self.db = DatabaseManager()
         self.code_analyzer = CodeAnalyzer()
+        self.dependency_scanner = DependencyScanner()
 
         # State variables to hold data for the PDF and re-analysis
         self.current_ip = ""
@@ -86,6 +88,7 @@ class OmniScanGUI(ctk.CTk):
         self.codebase_report = ""            # latest SAST AI report
         self.codebase_red_var = ctk.BooleanVar(value=False)
         self.codebase_file_widgets = []      # file-tree labels for easy clearing
+        self.codebase_finding_widgets = []   # deterministic-finding rows for easy clearing
         self.nav_buttons = {}                # key -> navigation header button
 
         # Build all three views plus the persistent navigation header
@@ -557,6 +560,17 @@ class OmniScanGUI(ctk.CTk):
         )
         self.code_export_button.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
+        self.code_deps_button = ctk.CTkButton(
+            action_row,
+            text="🔗 Scan Dependencies",
+            command=self.start_dependency_scan_thread,
+            fg_color="#333333",
+            text_color="#FFFFFF",
+            hover_color="#555555",
+            font=ctk.CTkFont(weight="bold"),
+        )
+        self.code_deps_button.grid(row=1, column=0, columnspan=2, padx=0, pady=(8, 0), sticky="ew")
+
         self.code_red_switch = ctk.CTkSwitch(
             self.code_panel,
             text="🔵 Blue Team Mode",
@@ -616,6 +630,43 @@ class OmniScanGUI(ctk.CTk):
 
         self.code_tabview.add("AI Report")
         self.code_tabview.add("Code Viewer")
+        self.code_tabview.add("Findings")
+
+        self.code_findings_summary = ctk.CTkLabel(
+            self.code_tabview.tab("Findings"),
+            text="No deterministic findings yet.",
+            text_color="#AAAAAA",
+            font=ctk.CTkFont(size=12),
+        )
+        self.code_findings_summary.pack(fill="x", padx=10, pady=(10, 2))
+
+        self.code_findings_frame = ctk.CTkScrollableFrame(
+            self.code_tabview.tab("Findings"),
+            fg_color="#181818",
+            corner_radius=8,
+        )
+        self.code_findings_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+
+        self.code_tabview.add("Dependencies")
+
+        self.code_deps_summary = ctk.CTkLabel(
+            self.code_tabview.tab("Dependencies"),
+            text="Run a dependency scan to check third-party packages.",
+            text_color="#AAAAAA",
+            font=ctk.CTkFont(size=12),
+        )
+        self.code_deps_summary.pack(fill="x", padx=10, pady=(10, 2))
+
+        self.code_deps_box = ctk.CTkTextbox(
+            self.code_tabview.tab("Dependencies"),
+            font=("Consolas", 13),
+            fg_color="#111111",
+            text_color="#FFFFFF",
+            wrap="word",
+        )
+        self.code_deps_box.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        self.code_deps_box.bind("<Key>", self._block_edit_keys)
+        self._configure_deps_tags()
 
         self.code_output_box = ctk.CTkTextbox(
             self.code_tabview.tab("AI Report"),
@@ -636,6 +687,7 @@ class OmniScanGUI(ctk.CTk):
         )
         self.code_viewer_box.pack(expand=True, fill="both", padx=5, pady=5)
         self.code_viewer_box.bind("<Key>", self._block_edit_keys)
+        self.code_viewer_box.tag_config("highlight", background="#4A3B00")
         self.code_viewer_box.insert(ctk.END, "Select a file in the File Inspector to view its source code here.")
 
     def browse_codebase_folder(self):
@@ -668,8 +720,10 @@ class OmniScanGUI(ctk.CTk):
 
         self.codebase_payload = payload
         self._populate_file_tree(payload)
+        self._display_findings(payload)
+        total_findings = payload.get("findings_summary", {}).get("total", 0)
         self.code_status_label.configure(
-            text=f"Status: Ready — {payload['file_count']} file(s), {payload['total_lines']} lines"
+            text=f"Status: Ready — {payload['file_count']} file(s), {payload['total_lines']} lines, {total_findings} finding(s)"
         )
 
         # A new target invalidates the previous report/export
@@ -677,6 +731,11 @@ class OmniScanGUI(ctk.CTk):
         self.code_export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF")
         self.code_output_box.delete("1.0", ctk.END)
         self.code_viewer_box.delete("1.0", ctk.END)
+        self.code_deps_box.delete("1.0", ctk.END)
+        self.code_deps_summary.configure(
+            text="Run a dependency scan to check third-party packages.",
+            text_color="#AAAAAA",
+        )
         self.code_tabview.set("AI Report")
 
     def _clear_file_tree(self):
@@ -689,6 +748,13 @@ class OmniScanGUI(ctk.CTk):
         self._clear_file_tree()
         target = payload.get("target", "")
 
+        # Per-file deterministic finding counts for the inspector badges.
+        finding_counts = {}
+        for finding in payload.get("findings", []):
+            path = finding.get("path")
+            if path:
+                finding_counts[path] = finding_counts.get(path, 0) + 1
+
         for f in payload.get("files", []):
             rel = f["path"]
             if target:
@@ -698,9 +764,11 @@ class OmniScanGUI(ctk.CTk):
                     rel = f["path"]
 
             marker = " ✂" if f.get("truncated") else ""
+            count = finding_counts.get(f["path"], 0)
+            badge = f"  ⚠{count}" if count else ""
             file_btn = ctk.CTkButton(
                 self.file_tree,
-                text=f"📄 {rel}  ({f['lines']} lines){marker}",
+                text=f"📄 {rel}  ({f['lines']} lines){badge}{marker}",
                 anchor="w",
                 command=lambda p=f["path"]: self._view_code_file(p),
                 fg_color="transparent",
@@ -713,8 +781,11 @@ class OmniScanGUI(ctk.CTk):
             file_btn.pack(fill="x", padx=4, pady=1)
             self.codebase_file_widgets.append(file_btn)
 
-    def _view_code_file(self, path: str):
-        """Loads the full source of the selected file into the Code Viewer tab."""
+    def _view_code_file(self, path: str, line: int = None):
+        """Loads the full source of the selected file into the Code Viewer tab.
+
+        When `line` is provided, scrolls to it and highlights the line.
+        """
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()
@@ -723,7 +794,94 @@ class OmniScanGUI(ctk.CTk):
 
         self.code_viewer_box.delete("1.0", ctk.END)
         self.code_viewer_box.insert(ctk.END, content)
+        if line:
+            self.code_viewer_box.tag_remove("highlight", "1.0", ctk.END)
+            start = f"{line}.0"
+            end = f"{line}.end"
+            self.code_viewer_box.tag_add("highlight", start, end)
+            self.code_viewer_box.see(start)
         self.code_tabview.set("Code Viewer")
+
+    def _display_findings(self, payload: dict):
+        """Renders deterministic pre-scan findings as clickable, color-coded rows."""
+        for widget in self.codebase_finding_widgets:
+            widget.destroy()
+        self.codebase_finding_widgets.clear()
+
+        findings = payload.get("findings", [])
+        summary = payload.get("findings_summary", {})
+        target = payload.get("target", "")
+
+        if not findings:
+            self.code_findings_summary.configure(
+                text="No deterministic findings detected. ✓",
+                text_color="#69F0AE",
+            )
+            return
+
+        parts = []
+        for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+            count = summary.get(sev, 0)
+            if count:
+                parts.append(f"{count} {sev}")
+        self.code_findings_summary.configure(
+            text=f"Deterministic pre-scan: {summary.get('total', 0)} finding(s) — " + ", ".join(parts),
+            text_color="#FFFFFF",
+        )
+
+        severity_rank = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+        findings = sorted(
+            findings,
+            key=lambda f: (
+                severity_rank.get(str(f.get("severity") or "").upper(), 9),
+                str(f.get("path", "")),
+                int(f.get("line", 0) or 0),
+            ),
+        )
+
+        for finding in findings:
+            sev = str(finding.get("severity") or "UNKNOWN").upper()
+            color = self.SEVERITY_COLORS.get(sev, self.SEVERITY_COLORS["UNKNOWN"])
+            path = finding.get("path", "")
+            rel = path
+            if target:
+                try:
+                    rel = os.path.relpath(path, target)
+                except ValueError:
+                    rel = path
+            line = finding.get("line", 0)
+            name = finding.get("name", "Finding")
+            cwe = finding.get("cwe", "")
+            match_text = str(finding.get("match", ""))
+            if len(match_text) > 160:
+                match_text = match_text[:160] + "..."
+
+            label = f"[{sev}] {name}" + (f" ({cwe})" if cwe else "")
+            btn = ctk.CTkButton(
+                self.code_findings_frame,
+                text=label,
+                anchor="w",
+                command=lambda p=path, l=line: self._view_code_file(p, l),
+                fg_color="#222222",
+                hover_color="#333333",
+                text_color=color,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                height=26,
+                corner_radius=4,
+            )
+            btn.pack(fill="x", padx=4, pady=1)
+            self.codebase_finding_widgets.append(btn)
+
+            sub = ctk.CTkLabel(
+                self.code_findings_frame,
+                text=f"    {rel}:{line}   {match_text}",
+                anchor="w",
+                justify="left",
+                text_color="#9E9E9E",
+                font=ctk.CTkFont(size=11),
+            )
+            sub.pack(fill="x", padx=4, pady=(0, 2))
+            self.codebase_finding_widgets.append(sub)
 
     def _on_code_red_toggle(self):
         if self.codebase_red_var.get():
@@ -771,6 +929,99 @@ class OmniScanGUI(ctk.CTk):
         self.code_output_box.insert(ctk.END, f"[!] Codebase Analysis Error: {error_msg}\n")
         self.code_start_button.configure(state="normal", text="Start Analysis")
         self.code_status_label.configure(text="Status: Analysis Failed")
+
+    def start_dependency_scan_thread(self):
+        """Kicks off a dependency vulnerability scan in the background."""
+        if not self.codebase_target:
+            self.code_status_label.configure(text="Status: No codebase selected")
+            return
+
+        self.code_deps_button.configure(state="disabled", text="Scanning...")
+        self.code_status_label.configure(text="Status: Scanning dependencies via OSV...")
+        self.code_deps_summary.configure(text="Scanning dependencies via OSV...", text_color="#AAAAAA")
+        self.code_deps_box.delete("1.0", ctk.END)
+        self.code_tabview.set("Dependencies")
+
+        threading.Thread(target=self._dependency_scan_target, daemon=True).start()
+
+    def _dependency_scan_target(self):
+        try:
+            report = self.dependency_scanner.scan_target(self.codebase_target)
+            self.after(0, self._on_dependency_scan_complete, report)
+        except Exception as e:
+            self.after(0, self._on_dependency_scan_error, str(e))
+
+    def _on_dependency_scan_complete(self, report: dict):
+        self.code_deps_button.configure(state="normal", text="🔗 Scan Dependencies")
+        self._display_dependencies(report)
+        summary = report.get("summary", {})
+        self.code_status_label.configure(
+            text=f"Status: {summary.get('packages_scanned', 0)} package(s), {summary.get('total_vulns', 0)} vuln(s)"
+        )
+
+    def _on_dependency_scan_error(self, error_msg: str):
+        self.code_deps_button.configure(state="normal", text="🔗 Scan Dependencies")
+        self.code_deps_summary.configure(text=f"Dependency scan failed: {error_msg}", text_color="#FF5252")
+        self.code_status_label.configure(text="Status: Dependency scan failed")
+
+    def _display_dependencies(self, report: dict):
+        """Renders dependency scan results with severity color-coding."""
+        self.code_deps_box.delete("1.0", ctk.END)
+
+        summary = report.get("summary", {})
+        packages = report.get("packages", [])
+        total_vulns = summary.get("total_vulns", 0)
+
+        if not packages:
+            self.code_deps_summary.configure(
+                text="No supported dependency manifest files found in the target.",
+                text_color="#AAAAAA",
+            )
+            self.code_deps_box.insert(ctk.END, "No dependency manifest files detected.\n")
+            return
+
+        if total_vulns == 0:
+            self.code_deps_summary.configure(
+                text=f"No known vulnerabilities in {summary.get('packages_scanned', 0)} scanned package(s). ✓",
+                text_color="#69F0AE",
+            )
+        else:
+            self.code_deps_summary.configure(
+                text=(
+                    f"Dependency scan: {summary.get('packages_scanned', 0)} package(s) scanned, "
+                    f"{summary.get('vulnerable', 0)} vulnerable, {total_vulns} vuln(s)"
+                ),
+                text_color="#FFFFFF",
+            )
+
+        for pkg in packages:
+            vulns = pkg.get("vulns", [])
+            if not vulns:
+                continue
+
+            name = pkg.get("name", "?")
+            version = pkg.get("version", "?")
+            ecosystem = pkg.get("ecosystem", "?")
+            source = pkg.get("source", "")
+
+            self.code_deps_box.insert(ctk.END, f"\n📦 {name}@{version}", "pkg")
+            self.code_deps_box.insert(ctk.END, f"  ({ecosystem})", "muted")
+            if source:
+                self.code_deps_box.insert(ctk.END, f"  [{source}]", "muted")
+            self.code_deps_box.insert(ctk.END, "\n")
+
+            for v in vulns:
+                sev = str(v.get("severity") or "").upper()
+                if sev not in self.SEVERITY_COLORS:
+                    sev = "UNKNOWN"
+                vid = v.get("id", "?")
+                fixed = v.get("fixed")
+                fixed_str = f"  (fixed in {fixed})" if fixed else ""
+                self.code_deps_box.insert(ctk.END, f"    {sev:<8}", sev)
+                self.code_deps_box.insert(ctk.END, f"{vid}{fixed_str}\n", "cve")
+                summary_text = v.get("summary", "")
+                if summary_text:
+                    self.code_deps_box.insert(ctk.END, f"      {summary_text}\n", "muted")
 
     def export_codebase_pdf(self):
         """Exports the current codebase SAST report to a professional PDF."""
@@ -837,6 +1088,15 @@ class OmniScanGUI(ctk.CTk):
         box = self.cve_box
         box.tag_config("host", foreground="#FFFFFF")
         box.tag_config("port", foreground="#4FC3F7")
+        box.tag_config("muted", foreground="#9E9E9E")
+        box.tag_config("cve", foreground="#E0E0E0")
+        for severity, color in self.SEVERITY_COLORS.items():
+            box.tag_config(severity, foreground=color)
+
+    def _configure_deps_tags(self):
+        """Configures text tags used to color-code the dependency view."""
+        box = self.code_deps_box
+        box.tag_config("pkg", foreground="#FFFFFF")
         box.tag_config("muted", foreground="#9E9E9E")
         box.tag_config("cve", foreground="#E0E0E0")
         for severity, color in self.SEVERITY_COLORS.items():

@@ -1,5 +1,7 @@
 import os
 
+from rules_engine import RulesEngine
+
 
 class CodeAnalyzer:
     """Scans source code in a directory (recursively) or a single file and
@@ -24,6 +26,7 @@ class CodeAnalyzer:
     def __init__(self, max_file_chars=None, max_total_chars=None):
         self.max_file_chars = max_file_chars or self.DEFAULT_MAX_FILE_CHARS
         self.max_total_chars = max_total_chars or self.DEFAULT_MAX_TOTAL_CHARS
+        self.rules = RulesEngine()
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -58,7 +61,12 @@ class CodeAnalyzer:
         return self.build_payload(files, target_path)
 
     def build_payload(self, files: list, target_path: str) -> dict:
-        """Assembles the final structured payload, applying the global cap."""
+        """Assembles the final structured payload, applying the global cap.
+
+        Deterministic findings are aggregated across ALL discovered files (not
+        just those that fit the token budget) into a flat list plus a severity
+        summary.
+        """
         total_lines = sum(f["lines"] for f in files)
         total_chars = 0
         truncated = False
@@ -84,6 +92,16 @@ class CodeAnalyzer:
                 "truncated": f["truncated"] or len(snippet) < len(f["snippet"]),
             })
 
+        # Aggregate deterministic findings across all discovered files.
+        all_findings = []
+        for f in files:
+            for finding in f.get("findings", []):
+                finding = dict(finding)
+                finding["path"] = f["path"]
+                all_findings.append(finding)
+
+        findings_summary = self._summarize_findings(all_findings)
+
         return {
             "target": target_path,
             "file_count": len(payload_files),
@@ -92,7 +110,20 @@ class CodeAnalyzer:
             "total_chars": total_chars,
             "truncated": truncated or any(f["truncated"] for f in files),
             "files": payload_files,
+            "findings": all_findings,
+            "findings_summary": findings_summary,
         }
+
+    @staticmethod
+    def _summarize_findings(findings: list) -> dict:
+        """Counts findings by severity and returns a small summary dict."""
+        summary = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "total": 0}
+        for f in findings:
+            sev = str(f.get("severity", "")).upper()
+            if sev in summary:
+                summary[sev] += 1
+            summary["total"] += 1
+        return summary
 
     # ------------------------------------------------------------------ #
     # Internal helpers
@@ -119,7 +150,8 @@ class CodeAnalyzer:
         return ext in self.SUPPORTED_EXTENSIONS
 
     def _read_file(self, path: str) -> dict:
-        """Reads a file, counts its lines, and truncates overly large snippets."""
+        """Reads a file, counts its lines, truncates the snippet, and runs
+        the deterministic rule scan against the FULL file contents."""
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()
@@ -129,6 +161,7 @@ class CodeAnalyzer:
                 "lines": 0,
                 "snippet": f"[!] Could not read file: {exc}",
                 "truncated": False,
+                "findings": [],
             }
 
         if content:
@@ -141,7 +174,16 @@ class CodeAnalyzer:
         if truncated:
             snippet += "\n... [file truncated — exceeds per-file token cap]"
 
-        return {"path": path, "lines": lines, "snippet": snippet, "truncated": truncated}
+        # Run deterministic rules on the complete file (not the truncated snippet).
+        findings = self.rules.scan(content)
+
+        return {
+            "path": path,
+            "lines": lines,
+            "snippet": snippet,
+            "truncated": truncated,
+            "findings": findings,
+        }
 
 
 # Local Verification Block
