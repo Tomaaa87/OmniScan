@@ -50,16 +50,26 @@ class OmniScanner:
         self.nm = nmap.PortScanner(nmap_search_path=_build_nmap_search_path())
         # Thread pool executor to run synchronous nmap calls asynchronously
         self.executor = ThreadPoolExecutor(max_workers=2)
+        # Raw stdout captured from the most recent nmap execution
+        self.last_nmap_output = ""
+        # Structured dict of the most recent nmap result (python-nmap format)
+        self.last_scan_result = {}
 
     def _execute_scan(self, target: str, arguments: str) -> dict:
         """Synchronous wrapper for nmap scanning execution."""
         try:
             self.nm.scan(hosts=target, arguments=arguments)
+            # Capture the raw nmap console output for display in the UI.
+            try:
+                self.last_nmap_output = self.nm.get_nmap_last_output()
+            except Exception:
+                self.last_nmap_output = ""
             # Use _scan_result dict directly — analysed_output does not exist in python-nmap
             result = self.nm._scan_result
             # Defensive: ensure we always return a dict
             if not isinstance(result, dict):
                 return {"error": f"Unexpected scan result type: {type(result).__name__}"}
+            self.last_scan_result = result
             return result
         except nmap.PortScannerError as e:
             # Catches nmap-level errors (invalid flags, permission denied, etc.)

@@ -1,6 +1,5 @@
 import customtkinter as ctk
 import threading
-import json
 import asyncio
 import os
 import socket  # <-- NEW: Used for network discovery
@@ -24,6 +23,15 @@ ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue") 
 
 class OmniScanGUI(ctk.CTk):
+    # Severity -> foreground color used in the enriched-data (CVE) viewer.
+    SEVERITY_COLORS = {
+        "CRITICAL": "#FF5252",
+        "HIGH": "#FF9E40",
+        "MEDIUM": "#FFD740",
+        "LOW": "#69F0AE",
+        "UNKNOWN": "#9E9E9E",
+    }
+
     def __init__(self):
         super().__init__()
 
@@ -189,8 +197,8 @@ class OmniScanGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self.network_frame, width=250, corner_radius=0, fg_color="#111111")
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Shifted the weight down to row 16 to account for mode switch, re-analyze, -Pn, NSE, custom flags, and progress bar
-        self.sidebar_frame.grid_rowconfigure(16, weight=1) 
+        # Extra vertical space (row 18) keeps the sidebar controls top-packed.
+        self.sidebar_frame.grid_rowconfigure(18, weight=1) 
 
         self.logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -384,6 +392,28 @@ class OmniScanGUI(ctk.CTk):
             button_hover_color="#555555"
         )
         self.history_dropdown.grid(row=16, column=0, padx=20, pady=10, sticky="ew")
+
+        # --- CVE Cache TTL Setting ---
+        self.ttl_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.ttl_frame.grid(row=17, column=0, padx=20, pady=(0, 15), sticky="ew")
+        self.ttl_frame.grid_columnconfigure(1, weight=1)
+
+        self.ttl_label = ctk.CTkLabel(
+            self.ttl_frame,
+            text="CVE Cache TTL (days)",
+            text_color="#AAAAAA",
+            font=ctk.CTkFont(size=12),
+        )
+        self.ttl_label.grid(row=0, column=0, padx=(0, 8), sticky="w")
+
+        self.ttl_entry = ctk.CTkEntry(
+            self.ttl_frame,
+            width=70,
+            fg_color="#222222",
+            border_color="#555555",
+        )
+        self.ttl_entry.insert(0, str(DatabaseManager.DEFAULT_CACHE_TTL_DAYS))
+        self.ttl_entry.grid(row=0, column=1, sticky="ew")
         
         # Populate history on launch
         self.refresh_history_dropdown()
@@ -394,6 +424,7 @@ class OmniScanGUI(ctk.CTk):
         
         self.tabview.add("Terminal Logs")
         self.tabview.add("Enriched Data (CVEs)")
+        self.tabview.add("Nmap Output")
         self.tabview.add("AI Intelligence")
 
         self.terminal_box = ctk.CTkTextbox(self.tabview.tab("Terminal Logs"), font=("Consolas", 14), fg_color="#000000", text_color="#00FF00")
@@ -402,13 +433,20 @@ class OmniScanGUI(ctk.CTk):
         self.cve_box = ctk.CTkTextbox(self.tabview.tab("Enriched Data (CVEs)"), font=("Consolas", 13), fg_color="#111111", text_color="#FFFFFF")
         self.cve_box.pack(expand=True, fill="both", padx=10, pady=10)
 
+        self.nmap_box = ctk.CTkTextbox(self.tabview.tab("Nmap Output"), font=("Consolas", 13), fg_color="#111111", text_color="#E0E0E0")
+        self.nmap_box.pack(expand=True, fill="both", padx=10, pady=10)
+
         self.ai_box = ctk.CTkTextbox(self.tabview.tab("AI Intelligence"), font=("Consolas", 14), fg_color="#111111", text_color="#FFFFFF", wrap="word")
         self.ai_box.pack(expand=True, fill="both", padx=10, pady=10)
 
         # Allow highlighting and copying, but block manual text modification
         self.terminal_box.bind("<Key>", self._block_edit_keys)
         self.cve_box.bind("<Key>", self._block_edit_keys)
+        self.nmap_box.bind("<Key>", self._block_edit_keys)
         self.ai_box.bind("<Key>", self._block_edit_keys)
+
+        # Configure severity color tags for the enriched-data viewer
+        self._configure_cve_tags()
 
     # ================= Navigation / View Switching =================
     def show_landing(self):
@@ -794,6 +832,237 @@ class OmniScanGUI(ctk.CTk):
         # Block everything else (typing, delete, backspace, paste, etc.)
         return "break"
 
+    def _configure_cve_tags(self):
+        """Configures text tags used to color-code the enriched CVE view."""
+        box = self.cve_box
+        box.tag_config("host", foreground="#FFFFFF")
+        box.tag_config("port", foreground="#4FC3F7")
+        box.tag_config("muted", foreground="#9E9E9E")
+        box.tag_config("cve", foreground="#E0E0E0")
+        for severity, color in self.SEVERITY_COLORS.items():
+            box.tag_config(severity, foreground=color)
+
+    def _display_enriched_data(self, data: dict):
+        """Renders enriched scan data into the CVE view with severity colors."""
+        self.cve_box.delete("1.0", ctk.END)
+
+        if not isinstance(data, dict):
+            self.cve_box.insert(ctk.END, "[!] No data to display.\n")
+            return
+
+        if "error" in data:
+            self.cve_box.insert(ctk.END, f"[!] {data['error']}\n")
+            return
+
+        for ip, host in data.items():
+            if not isinstance(host, dict):
+                continue
+            os_match = host.get("os_match") or "Unknown OS"
+            self.cve_box.insert(ctk.END, f"\nHost: {ip}   ({os_match})\n", "host")
+
+            ports = host.get("ports", [])
+            if not ports:
+                self.cve_box.insert(ctk.END, "    (no open ports recorded)\n", "muted")
+                continue
+
+            for port_info in ports:
+                if not isinstance(port_info, dict):
+                    continue
+                port = port_info.get("port", "?")
+                proto = port_info.get("protocol", "")
+                service = port_info.get("service", "")
+                product = port_info.get("product", "")
+                version = port_info.get("version", "")
+                state = port_info.get("state", "")
+
+                self.cve_box.insert(ctk.END, f"  {port}/{proto}  {service}", "port")
+                if product:
+                    detail = f"  {product} {version}".rstrip()
+                    if state:
+                        detail += f"  [{state}]"
+                    self.cve_box.insert(ctk.END, detail + "\n", "muted")
+                else:
+                    self.cve_box.insert(ctk.END, "\n")
+
+                vulns = port_info.get("vulnerabilities", [])
+                if not vulns:
+                    self.cve_box.insert(ctk.END, "      (no CVEs found)\n", "muted")
+                    continue
+
+                for v in vulns:
+                    if not isinstance(v, dict):
+                        continue
+                    severity = str(v.get("severity") or "").upper().strip()
+                    if severity not in self.SEVERITY_COLORS:
+                        severity = "UNKNOWN"
+                    score = v.get("cvss_score")
+                    score_str = f" [{score}]" if score is not None else ""
+                    cve_id = v.get("id", "?")
+                    summary = v.get("summary", "")
+
+                    self.cve_box.insert(ctk.END, f"      {severity:<8}", severity)
+                    self.cve_box.insert(ctk.END, f"{cve_id}{score_str}\n", "cve")
+                    if summary:
+                        self.cve_box.insert(ctk.END, f"        {summary}\n", "muted")
+
+    def _format_nmap_output(self, data: dict) -> str:
+        """Builds a classic, nmap-style text report from scan data.
+
+        Accepts either the raw python-nmap result dict (with a ``scan`` key)
+        or the parsed/enriched format (``ip -> host`` with a ``ports`` list).
+        """
+        if not isinstance(data, dict):
+            return ""
+
+        lines = []
+        scan = data.get("scan")
+        if isinstance(scan, dict):
+            # Raw python-nmap result: {"scan": {ip: {tcp: {...}, ...}}}
+            for ip, host in scan.items():
+                if isinstance(host, dict):
+                    lines.extend(self._format_raw_host(ip, host))
+        else:
+            # Parsed/enriched format: {ip: {"hostnames": [...], "ports": [...]}}
+            for ip, host in data.items():
+                if isinstance(host, dict):
+                    lines.extend(self._format_parsed_host(ip, host))
+
+        return "\n".join(lines)
+
+    def _format_raw_host(self, ip: str, host: dict) -> list:
+        """Formats a single host from the raw python-nmap result dict."""
+        lines = []
+
+        hostname = ""
+        hostnames = host.get("hostnames", [])
+        if hostnames:
+            for entry in hostnames:
+                if isinstance(entry, dict):
+                    hostname = entry.get("name", "")
+                elif entry:
+                    hostname = str(entry)
+                if hostname:
+                    break
+
+        target = f"{hostname} ({ip})" if hostname else ip
+        lines.append(f"Nmap scan report for {target}")
+
+        status = host.get("status", {})
+        reason = ""
+        if isinstance(status, dict):
+            reason = status.get("reason", "")
+
+        times = host.get("times", {})
+        if isinstance(times, dict) and times.get("srtt"):
+            try:
+                latency_s = int(times["srtt"]) / 1_000_000
+                lines.append(f"Host is up ({latency_s:.3f}s latency).")
+            except (ValueError, TypeError):
+                lines.append("Host is up.")
+        elif reason:
+            lines.append(f"Host is up ({reason}).")
+        else:
+            lines.append("Host is up.")
+
+        ports = []
+        for proto in ("tcp", "udp"):
+            proto_data = host.get(proto)
+            if isinstance(proto_data, dict):
+                for port, port_data in proto_data.items():
+                    if isinstance(port_data, dict):
+                        ports.append((proto, str(port), port_data))
+
+        if not ports:
+            lines.append("All scanned ports are closed.")
+        else:
+            lines.append("")
+            lines.append("PORT       STATE    SERVICE      VERSION")
+            for proto, port, pd in ports:
+                state = str(pd.get("state", "?"))
+                service = str(pd.get("name", ""))
+                version = " ".join(
+                    str(x) for x in (pd.get("product", ""), pd.get("version", "")) if x
+                )
+                extra = pd.get("extrainfo", "")
+                if extra:
+                    extra = str(extra).strip()
+                    if extra.startswith("(") and extra.endswith(")"):
+                        extra = extra[1:-1].strip()
+                    version = f"{version} ({extra})" if version else f"({extra})"
+                lines.append(
+                    f"{port}/{proto}".ljust(10)
+                    + f"{state}".ljust(9)
+                    + f"{service}".ljust(13)
+                    + version
+                )
+        lines.append("")
+        return lines
+
+    def _format_parsed_host(self, ip: str, host: dict) -> list:
+        """Formats a single host from the parsed/enriched data structure."""
+        lines = []
+
+        hostname = ""
+        hostnames = host.get("hostnames", [])
+        if hostnames:
+            for entry in hostnames:
+                if isinstance(entry, dict):
+                    hostname = entry.get("name", "")
+                elif entry:
+                    hostname = str(entry)
+                if hostname:
+                    break
+
+        target = f"{hostname} ({ip})" if hostname else ip
+        lines.append(f"Nmap scan report for {target}")
+        lines.append(f"OS: {host.get('os_match') or 'Unknown OS'}")
+
+        ports = host.get("ports", [])
+        if not ports:
+            lines.append("All scanned ports are closed.")
+        else:
+            lines.append("")
+            lines.append("PORT       STATE    SERVICE      VERSION")
+            for p in ports:
+                if not isinstance(p, dict):
+                    continue
+                port = str(p.get("port", "?"))
+                proto = str(p.get("protocol", ""))
+                state = str(p.get("state", "?"))
+                service = str(p.get("service", ""))
+                version = " ".join(
+                    str(x) for x in (p.get("product", ""), p.get("version", "")) if x
+                )
+                extra = p.get("extrainfo", "")
+                if extra:
+                    extra = str(extra).strip()
+                    if extra.startswith("(") and extra.endswith(")"):
+                        extra = extra[1:-1].strip()
+                    version = f"{version} ({extra})" if version else f"({extra})"
+                lines.append(
+                    f"{port}/{proto}".ljust(10)
+                    + f"{state}".ljust(9)
+                    + f"{service}".ljust(13)
+                    + version
+                )
+        lines.append("")
+        return lines
+
+    def _display_nmap_output(self, raw_result=None, fallback_data=None):
+        """Renders the classic nmap-style report into the Nmap tab."""
+        self.nmap_box.delete("1.0", ctk.END)
+
+        formatted = self._format_nmap_output(raw_result)
+        if not formatted and fallback_data is not None:
+            formatted = self._format_nmap_output(fallback_data)
+
+        if formatted:
+            self.nmap_box.insert(ctk.END, formatted)
+        else:
+            self.nmap_box.insert(ctk.END, "[!] No Nmap output available.\n")
+
+        self.nmap_box.see("1.0")
+
     def _on_mode_switch_toggle(self):
         """Updates the switch label and style when toggled between Blue/Red Team."""
         if self.mode_switch_var.get():
@@ -883,17 +1152,23 @@ class OmniScanGUI(ctk.CTk):
             self.status_label.configure(text="Status: Scan Failed")
             return
 
-        # --- 5. Populate the CVE / enriched-data view ---
+        # --- 5. Populate the raw Nmap output view ---
         enriched_data = results.get("enriched_data")
-        if enriched_data:
-            self.cve_box.insert(ctk.END, json.dumps(enriched_data, indent=4))
+        self._display_nmap_output(
+            results.get("raw_scan_result"),
+            fallback_data=enriched_data,
+        )
 
-        # --- 6. Populate the AI Intelligence view ---
+        # --- 6. Populate the CVE / enriched-data view ---
+        if enriched_data:
+            self._display_enriched_data(enriched_data)
+
+        # --- 7. Populate the AI Intelligence view ---
         ai_report = results.get("ai_report")
         if ai_report:
             self.ai_box.insert(ctk.END, ai_report)
 
-        # --- 7. Stash results for PDF export and re-analysis ---
+        # --- 8. Stash results for PDF export and re-analysis ---
         target_ip = results.get("target_ip", "")
         self.current_ip = target_ip
         self.current_report = ai_report or ""
@@ -986,6 +1261,7 @@ class OmniScanGUI(ctk.CTk):
 
         self.terminal_box.delete("1.0", ctk.END)
         self.cve_box.delete("1.0", ctk.END)
+        self.nmap_box.delete("1.0", ctk.END)
         self.ai_box.delete("1.0", ctk.END)
 
         self.log_terminal(f"[*] Loading historical scan ID {scan_id} from database...")
@@ -996,7 +1272,8 @@ class OmniScanGUI(ctk.CTk):
         self.current_enriched_data = scan_data["raw_data"]  # Store for re-analysis
 
         self.log_terminal(f"[+] Successfully loaded data for IP: {self.current_ip}")
-        self.cve_box.insert(ctk.END, json.dumps(scan_data["raw_data"], indent=4))
+        self._display_enriched_data(scan_data["raw_data"])
+        self._display_nmap_output(None, fallback_data=scan_data["raw_data"])
         self.ai_box.insert(ctk.END, self.current_report)
 
         # Re-enable the PDF button and re-analyze button for the loaded history
@@ -1049,11 +1326,33 @@ class OmniScanGUI(ctk.CTk):
             self.log_terminal(f"[!] Full traceback:\n{traceback.format_exc()}")
             self.status_label.configure(text="Status: Export Failed")
 
+    def _apply_ttl_setting(self) -> int:
+        """Reads and validates the CVE cache TTL from the sidebar entry.
+
+        Invalid input falls back to the default and resets the field.
+        The value is applied to the CVEMapper's backing database.
+        """
+        raw = self.ttl_entry.get().strip()
+        try:
+            days = int(raw)
+            if days < 0:
+                raise ValueError
+        except ValueError:
+            days = DatabaseManager.DEFAULT_CACHE_TTL_DAYS
+            self.ttl_entry.delete(0, ctk.END)
+            self.ttl_entry.insert(0, str(days))
+
+        self.mapper.db.cache_ttl_days = days
+        return days
+
     def start_scan_thread(self):
         target_ip = self.ip_entry.get()
         if not target_ip:
             self.log_terminal("[!] Error: No target IP provided.")
             return
+
+        ttl_days = self._apply_ttl_setting()
+        self.log_terminal(f"[*] CVE cache TTL set to {ttl_days} day(s).")
 
         # --- Disable all interactive controls during scan ---
         self.scan_button.configure(state="disabled", text="Scanning...")
@@ -1065,6 +1364,7 @@ class OmniScanGUI(ctk.CTk):
         # --- Clear previous results from all views ---
         self.terminal_box.delete("1.0", ctk.END)
         self.cve_box.delete("1.0", ctk.END)
+        self.nmap_box.delete("1.0", ctk.END)
         self.ai_box.delete("1.0", ctk.END)
 
         # --- Show and start the indeterminate progress bar ---
@@ -1085,6 +1385,7 @@ class OmniScanGUI(ctk.CTk):
         enriched_data = None
         ai_report = None
         error_msg = None
+        raw_scan_result = None
         red_team = self.mode_switch_var.get()  # Safe: BooleanVar.get() is thread-safe to read
 
         def add_log(msg: str):
@@ -1105,6 +1406,7 @@ class OmniScanGUI(ctk.CTk):
                         self.after(0, self._update_ui_with_results, {
                             "success": False, "target_ip": target_ip, "logs": logs,
                             "enriched_data": None, "ai_report": None,
+                            "raw_scan_result": None,
                             "error": error_msg, "red_team": red_team
                         })
                         return
@@ -1162,6 +1464,7 @@ class OmniScanGUI(ctk.CTk):
             raw_scan_data = loop.run_until_complete(
                 self.scanner.run_scan_async(target_ip, flags)
             )
+            raw_scan_result = getattr(self.scanner, "last_scan_result", None)
 
             if isinstance(raw_scan_data, dict) and "error" in raw_scan_data:
                 error_msg = raw_scan_data["error"]
@@ -1169,6 +1472,7 @@ class OmniScanGUI(ctk.CTk):
                 self.after(0, self._update_ui_with_results, {
                     "success": False, "target_ip": target_ip, "logs": logs,
                     "enriched_data": None, "ai_report": None,
+                    "raw_scan_result": raw_scan_result,
                     "error": error_msg, "red_team": red_team
                 })
                 return
@@ -1203,6 +1507,7 @@ class OmniScanGUI(ctk.CTk):
             "logs": logs,
             "enriched_data": enriched_data,
             "ai_report": ai_report,
+            "raw_scan_result": raw_scan_result,
             "error": error_msg,
             "red_team": red_team,
         })
