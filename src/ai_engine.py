@@ -131,10 +131,42 @@ class AIEngine:
         # Dynamically select the SAST system prompt based on operational mode
         selected_prompt = self.sast_red_prompt if red_team_mode else self.sast_blue_prompt
 
-        # Convert our structured payload into a formatted string for the AI to read
+        # Build the prompt explicitly so we can keep the deterministic pre-scan
+        # findings compact and never echo matched secret text to the model.
+        files_block = json.dumps(
+            [
+                {
+                    "path": f.get("path"),
+                    "lines": f.get("lines"),
+                    "snippet": f.get("snippet"),
+                }
+                for f in code_data.get("files", [])
+            ],
+            indent=2,
+        )
+        findings_block = json.dumps(
+            [
+                {
+                    "path": f.get("path"),
+                    "line": f.get("line"),
+                    "severity": f.get("severity"),
+                    "name": f.get("name"),
+                    "cwe": f.get("cwe"),
+                    "rule_id": f.get("rule_id"),
+                }
+                for f in code_data.get("findings", [])
+            ],
+            indent=2,
+        )
+
         user_prompt = (
             "Analyze the following source code payload:\n\n"
-            f"{json.dumps(code_data, indent=2)}"
+            f"Target: {code_data.get('target', 'unknown')}\n"
+            f"Deterministic pre-scan findings summary: {json.dumps(code_data.get('findings_summary', {}))}\n"
+            "Deterministic pre-scan findings (verify, contextualize and prioritize these; "
+            "do NOT re-report them as new discoveries):\n"
+            f"{findings_block}\n\n"
+            f"Source files:\n{files_block}"
         )
 
         try:

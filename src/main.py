@@ -86,6 +86,7 @@ class OmniScanGUI(ctk.CTk):
         self.codebase_report = ""            # latest SAST AI report
         self.codebase_red_var = ctk.BooleanVar(value=False)
         self.codebase_file_widgets = []      # file-tree labels for easy clearing
+        self.codebase_finding_widgets = []   # deterministic-finding rows for easy clearing
         self.nav_buttons = {}                # key -> navigation header button
 
         # Build all three views plus the persistent navigation header
@@ -616,6 +617,22 @@ class OmniScanGUI(ctk.CTk):
 
         self.code_tabview.add("AI Report")
         self.code_tabview.add("Code Viewer")
+        self.code_tabview.add("Findings")
+
+        self.code_findings_summary = ctk.CTkLabel(
+            self.code_tabview.tab("Findings"),
+            text="No deterministic findings yet.",
+            text_color="#AAAAAA",
+            font=ctk.CTkFont(size=12),
+        )
+        self.code_findings_summary.pack(fill="x", padx=10, pady=(10, 2))
+
+        self.code_findings_frame = ctk.CTkScrollableFrame(
+            self.code_tabview.tab("Findings"),
+            fg_color="#181818",
+            corner_radius=8,
+        )
+        self.code_findings_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
 
         self.code_output_box = ctk.CTkTextbox(
             self.code_tabview.tab("AI Report"),
@@ -636,6 +653,7 @@ class OmniScanGUI(ctk.CTk):
         )
         self.code_viewer_box.pack(expand=True, fill="both", padx=5, pady=5)
         self.code_viewer_box.bind("<Key>", self._block_edit_keys)
+        self.code_viewer_box.tag_config("highlight", background="#4A3B00")
         self.code_viewer_box.insert(ctk.END, "Select a file in the File Inspector to view its source code here.")
 
     def browse_codebase_folder(self):
@@ -668,8 +686,10 @@ class OmniScanGUI(ctk.CTk):
 
         self.codebase_payload = payload
         self._populate_file_tree(payload)
+        self._display_findings(payload)
+        total_findings = payload.get("findings_summary", {}).get("total", 0)
         self.code_status_label.configure(
-            text=f"Status: Ready — {payload['file_count']} file(s), {payload['total_lines']} lines"
+            text=f"Status: Ready — {payload['file_count']} file(s), {payload['total_lines']} lines, {total_findings} finding(s)"
         )
 
         # A new target invalidates the previous report/export
@@ -689,6 +709,13 @@ class OmniScanGUI(ctk.CTk):
         self._clear_file_tree()
         target = payload.get("target", "")
 
+        # Per-file deterministic finding counts for the inspector badges.
+        finding_counts = {}
+        for finding in payload.get("findings", []):
+            path = finding.get("path")
+            if path:
+                finding_counts[path] = finding_counts.get(path, 0) + 1
+
         for f in payload.get("files", []):
             rel = f["path"]
             if target:
@@ -698,9 +725,11 @@ class OmniScanGUI(ctk.CTk):
                     rel = f["path"]
 
             marker = " ✂" if f.get("truncated") else ""
+            count = finding_counts.get(f["path"], 0)
+            badge = f"  ⚠{count}" if count else ""
             file_btn = ctk.CTkButton(
                 self.file_tree,
-                text=f"📄 {rel}  ({f['lines']} lines){marker}",
+                text=f"📄 {rel}  ({f['lines']} lines){badge}{marker}",
                 anchor="w",
                 command=lambda p=f["path"]: self._view_code_file(p),
                 fg_color="transparent",
@@ -713,8 +742,11 @@ class OmniScanGUI(ctk.CTk):
             file_btn.pack(fill="x", padx=4, pady=1)
             self.codebase_file_widgets.append(file_btn)
 
-    def _view_code_file(self, path: str):
-        """Loads the full source of the selected file into the Code Viewer tab."""
+    def _view_code_file(self, path: str, line: int = None):
+        """Loads the full source of the selected file into the Code Viewer tab.
+
+        When `line` is provided, scrolls to it and highlights the line.
+        """
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()
@@ -723,7 +755,94 @@ class OmniScanGUI(ctk.CTk):
 
         self.code_viewer_box.delete("1.0", ctk.END)
         self.code_viewer_box.insert(ctk.END, content)
+        if line:
+            self.code_viewer_box.tag_remove("highlight", "1.0", ctk.END)
+            start = f"{line}.0"
+            end = f"{line}.end"
+            self.code_viewer_box.tag_add("highlight", start, end)
+            self.code_viewer_box.see(start)
         self.code_tabview.set("Code Viewer")
+
+    def _display_findings(self, payload: dict):
+        """Renders deterministic pre-scan findings as clickable, color-coded rows."""
+        for widget in self.codebase_finding_widgets:
+            widget.destroy()
+        self.codebase_finding_widgets.clear()
+
+        findings = payload.get("findings", [])
+        summary = payload.get("findings_summary", {})
+        target = payload.get("target", "")
+
+        if not findings:
+            self.code_findings_summary.configure(
+                text="No deterministic findings detected. ✓",
+                text_color="#69F0AE",
+            )
+            return
+
+        parts = []
+        for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+            count = summary.get(sev, 0)
+            if count:
+                parts.append(f"{count} {sev}")
+        self.code_findings_summary.configure(
+            text=f"Deterministic pre-scan: {summary.get('total', 0)} finding(s) — " + ", ".join(parts),
+            text_color="#FFFFFF",
+        )
+
+        severity_rank = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+        findings = sorted(
+            findings,
+            key=lambda f: (
+                severity_rank.get(str(f.get("severity") or "").upper(), 9),
+                str(f.get("path", "")),
+                int(f.get("line", 0) or 0),
+            ),
+        )
+
+        for finding in findings:
+            sev = str(finding.get("severity") or "UNKNOWN").upper()
+            color = self.SEVERITY_COLORS.get(sev, self.SEVERITY_COLORS["UNKNOWN"])
+            path = finding.get("path", "")
+            rel = path
+            if target:
+                try:
+                    rel = os.path.relpath(path, target)
+                except ValueError:
+                    rel = path
+            line = finding.get("line", 0)
+            name = finding.get("name", "Finding")
+            cwe = finding.get("cwe", "")
+            match_text = str(finding.get("match", ""))
+            if len(match_text) > 160:
+                match_text = match_text[:160] + "..."
+
+            label = f"[{sev}] {name}" + (f" ({cwe})" if cwe else "")
+            btn = ctk.CTkButton(
+                self.code_findings_frame,
+                text=label,
+                anchor="w",
+                command=lambda p=path, l=line: self._view_code_file(p, l),
+                fg_color="#222222",
+                hover_color="#333333",
+                text_color=color,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                height=26,
+                corner_radius=4,
+            )
+            btn.pack(fill="x", padx=4, pady=1)
+            self.codebase_finding_widgets.append(btn)
+
+            sub = ctk.CTkLabel(
+                self.code_findings_frame,
+                text=f"    {rel}:{line}   {match_text}",
+                anchor="w",
+                justify="left",
+                text_color="#9E9E9E",
+                font=ctk.CTkFont(size=11),
+            )
+            sub.pack(fill="x", padx=4, pady=(0, 2))
+            self.codebase_finding_widgets.append(sub)
 
     def _on_code_red_toggle(self):
         if self.codebase_red_var.get():

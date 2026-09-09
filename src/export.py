@@ -287,6 +287,34 @@ class PDFExportEngine:
                                new_x=XPos.LEFT, new_y=YPos.NEXT)
             pdf.ln(4)
 
+        # --- Deterministic pre-scan findings ---
+        findings = code_data.get("findings", []) if isinstance(code_data, dict) else []
+        if findings:
+            pdf.set_font(sans, "B", 13)
+            pdf.set_text_color(30, 30, 30)
+            pdf.cell(200, 8, text="Deterministic Pre-Scan Findings")
+            pdf.ln(8)
+
+            pdf.set_font(mono, "", 9)
+            for f in findings:
+                sev = str(f.get("severity", "UNKNOWN")).upper()
+                name = f.get("name", "Finding")
+                cwe = f.get("cwe", "")
+                path = f.get("path", "")
+                line = f.get("line", 0)
+                match_text = self._clean_text(str(f.get("match", "")))
+                if len(match_text) > 160:
+                    match_text = match_text[:160] + "..."
+                cwe_str = f" ({cwe})" if cwe else ""
+
+                pdf.set_text_color(150, 20, 20)
+                pdf.multi_cell(0, 6, text=f"[{sev}] {name}{cwe_str}",
+                               new_x=XPos.LEFT, new_y=YPos.NEXT)
+                pdf.set_text_color(60, 60, 60)
+                pdf.multi_cell(0, 6, text=f"    {path}:{line}   {match_text}",
+                               new_x=XPos.LEFT, new_y=YPos.NEXT)
+            pdf.ln(4)
+
         # --- AI analysis body ---
         pdf.set_font(sans, "B", 14)
         pdf.set_text_color(30, 30, 30)
