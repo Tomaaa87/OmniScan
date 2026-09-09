@@ -4,14 +4,75 @@ import logging
 from database import DatabaseManager
 
 class CVEMapper:
-    def __init__(self):
+    def __init__(self, cache_ttl_days=None):
         # Updated to CIRCL's new Vulnerability-Lookup API
         self.api_base_url = "https://vulnerability.circl.lu/api/search/"
         
         # Connect to our new local SQLite database manager
-        self.db = DatabaseManager()
+        self.db = DatabaseManager(cache_ttl_days=cache_ttl_days)
         
         logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    @staticmethod
+    def _extract_cvss(cve_record: dict) -> dict:
+        """Defensively pull CVSS score/severity/vector from an NVD-style record.
+
+        CIRCL's Vulnerability-Lookup API nests metrics in several possible
+        shapes depending on the schema version, so we probe multiple containers
+        and prefer the newest CVSS version available.
+        """
+        cvss = {"cvss_score": None, "severity": None, "cvss_vector": None}
+
+        if not isinstance(cve_record, dict):
+            return cvss
+
+        containers_obj = cve_record.get("containers", {})
+        if not isinstance(containers_obj, dict):
+            containers_obj = {}
+        cna = containers_obj.get("cna", {})
+        if not isinstance(cna, dict):
+            cna = {}
+        cve_obj = cve_record.get("cve", {})
+
+        metric_objects = []
+        for container in (containers_obj, cna, cve_obj, cve_record):
+            if not isinstance(container, dict):
+                continue
+            metrics = container.get("metrics", [])
+            if isinstance(metrics, list):
+                for m in metrics:
+                    if isinstance(m, dict):
+                        metric_objects.append(m)
+            # Legacy NVD 1.x shape: baseMetricV3/baseMetricV2 -> cvssV3/cvssV2
+            for legacy in ("baseMetricV3", "baseMetricV2"):
+                legacy_obj = container.get(legacy)
+                if isinstance(legacy_obj, dict):
+                    inner = legacy_obj.get("cvssV3") or legacy_obj.get("cvssV2")
+                    if isinstance(inner, dict):
+                        metric_objects.append(inner)
+
+        for key in ("cvssV4_0", "cvssV3_1", "cvssV3_0", "cvssV2_0"):
+            for m in metric_objects:
+                metric = m.get(key)
+                if isinstance(metric, dict):
+                    score = metric.get("baseScore") or metric.get("score")
+                    severity = metric.get("baseSeverity") or metric.get("severity")
+                    vector = metric.get("vectorString") or metric.get("vector")
+                    if score is not None or severity is not None:
+                        cvss["cvss_score"] = score
+                        cvss["severity"] = severity
+                        cvss["cvss_vector"] = vector
+                        return cvss
+
+        # Last-resort top-level fields some feeds expose directly.
+        cvss["severity"] = cve_record.get("severity") or cve_record.get("baseSeverity")
+        cvss["cvss_score"] = (
+            cve_record.get("cvss_score")
+            or cve_record.get("cvss")
+            or cve_record.get("baseScore")
+        )
+        cvss["cvss_vector"] = cve_record.get("cvss_vector") or cve_record.get("vectorString")
+        return cvss
 
     def _query_cve_api(self, vendor_product: str) -> list:
         """Hits the external API or pulls from the local DB cache to fetch CVEs."""
@@ -47,7 +108,9 @@ class CVEMapper:
                                 except Exception:
                                     pass
                                 
-                                cves.append({"id": cve_id, "summary": summary})
+                                cve_entry = {"id": cve_id, "summary": summary}
+                                cve_entry.update(self._extract_cvss(cve_record))
+                                cves.append(cve_entry)
 
                     # --- FALLBACK: Aggressive Fuzzy Parsing ---
                     elif not cves:
@@ -62,7 +125,9 @@ class CVEMapper:
                             cve_id = item.get("id") or item.get("cve_id") or item.get("CVE") or item.get("name")
                             summary = item.get("summary") or item.get("description") or "No description provided."
                             if cve_id:
-                                cves.append({"id": cve_id, "summary": summary})
+                                cve_entry = {"id": cve_id, "summary": summary}
+                                cve_entry.update(self._extract_cvss(item))
+                                cves.append(cve_entry)
                 
                 # --- VERIFICATION & CACHING ---
                 if cves:
