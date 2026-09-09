@@ -14,6 +14,7 @@ from ai_engine import AIEngine
 from export import PDFExportEngine
 from database import DatabaseManager
 from code_analyzer import CodeAnalyzer
+from dependency_scanner import DependencyScanner
 
 # Load environment variables (.env)
 load_dotenv()
@@ -49,6 +50,7 @@ class OmniScanGUI(ctk.CTk):
         self.exporter = PDFExportEngine()
         self.db = DatabaseManager()
         self.code_analyzer = CodeAnalyzer()
+        self.dependency_scanner = DependencyScanner()
 
         # State variables to hold data for the PDF and re-analysis
         self.current_ip = ""
@@ -558,6 +560,17 @@ class OmniScanGUI(ctk.CTk):
         )
         self.code_export_button.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
+        self.code_deps_button = ctk.CTkButton(
+            action_row,
+            text="🔗 Scan Dependencies",
+            command=self.start_dependency_scan_thread,
+            fg_color="#333333",
+            text_color="#FFFFFF",
+            hover_color="#555555",
+            font=ctk.CTkFont(weight="bold"),
+        )
+        self.code_deps_button.grid(row=1, column=0, columnspan=2, padx=0, pady=(8, 0), sticky="ew")
+
         self.code_red_switch = ctk.CTkSwitch(
             self.code_panel,
             text="🔵 Blue Team Mode",
@@ -634,6 +647,27 @@ class OmniScanGUI(ctk.CTk):
         )
         self.code_findings_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
 
+        self.code_tabview.add("Dependencies")
+
+        self.code_deps_summary = ctk.CTkLabel(
+            self.code_tabview.tab("Dependencies"),
+            text="Run a dependency scan to check third-party packages.",
+            text_color="#AAAAAA",
+            font=ctk.CTkFont(size=12),
+        )
+        self.code_deps_summary.pack(fill="x", padx=10, pady=(10, 2))
+
+        self.code_deps_box = ctk.CTkTextbox(
+            self.code_tabview.tab("Dependencies"),
+            font=("Consolas", 13),
+            fg_color="#111111",
+            text_color="#FFFFFF",
+            wrap="word",
+        )
+        self.code_deps_box.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        self.code_deps_box.bind("<Key>", self._block_edit_keys)
+        self._configure_deps_tags()
+
         self.code_output_box = ctk.CTkTextbox(
             self.code_tabview.tab("AI Report"),
             font=("Consolas", 13),
@@ -697,6 +731,11 @@ class OmniScanGUI(ctk.CTk):
         self.code_export_button.configure(state="disabled", fg_color="#333333", text_color="#FFFFFF")
         self.code_output_box.delete("1.0", ctk.END)
         self.code_viewer_box.delete("1.0", ctk.END)
+        self.code_deps_box.delete("1.0", ctk.END)
+        self.code_deps_summary.configure(
+            text="Run a dependency scan to check third-party packages.",
+            text_color="#AAAAAA",
+        )
         self.code_tabview.set("AI Report")
 
     def _clear_file_tree(self):
@@ -891,6 +930,99 @@ class OmniScanGUI(ctk.CTk):
         self.code_start_button.configure(state="normal", text="Start Analysis")
         self.code_status_label.configure(text="Status: Analysis Failed")
 
+    def start_dependency_scan_thread(self):
+        """Kicks off a dependency vulnerability scan in the background."""
+        if not self.codebase_target:
+            self.code_status_label.configure(text="Status: No codebase selected")
+            return
+
+        self.code_deps_button.configure(state="disabled", text="Scanning...")
+        self.code_status_label.configure(text="Status: Scanning dependencies via OSV...")
+        self.code_deps_summary.configure(text="Scanning dependencies via OSV...", text_color="#AAAAAA")
+        self.code_deps_box.delete("1.0", ctk.END)
+        self.code_tabview.set("Dependencies")
+
+        threading.Thread(target=self._dependency_scan_target, daemon=True).start()
+
+    def _dependency_scan_target(self):
+        try:
+            report = self.dependency_scanner.scan_target(self.codebase_target)
+            self.after(0, self._on_dependency_scan_complete, report)
+        except Exception as e:
+            self.after(0, self._on_dependency_scan_error, str(e))
+
+    def _on_dependency_scan_complete(self, report: dict):
+        self.code_deps_button.configure(state="normal", text="🔗 Scan Dependencies")
+        self._display_dependencies(report)
+        summary = report.get("summary", {})
+        self.code_status_label.configure(
+            text=f"Status: {summary.get('packages_scanned', 0)} package(s), {summary.get('total_vulns', 0)} vuln(s)"
+        )
+
+    def _on_dependency_scan_error(self, error_msg: str):
+        self.code_deps_button.configure(state="normal", text="🔗 Scan Dependencies")
+        self.code_deps_summary.configure(text=f"Dependency scan failed: {error_msg}", text_color="#FF5252")
+        self.code_status_label.configure(text="Status: Dependency scan failed")
+
+    def _display_dependencies(self, report: dict):
+        """Renders dependency scan results with severity color-coding."""
+        self.code_deps_box.delete("1.0", ctk.END)
+
+        summary = report.get("summary", {})
+        packages = report.get("packages", [])
+        total_vulns = summary.get("total_vulns", 0)
+
+        if not packages:
+            self.code_deps_summary.configure(
+                text="No supported dependency manifest files found in the target.",
+                text_color="#AAAAAA",
+            )
+            self.code_deps_box.insert(ctk.END, "No dependency manifest files detected.\n")
+            return
+
+        if total_vulns == 0:
+            self.code_deps_summary.configure(
+                text=f"No known vulnerabilities in {summary.get('packages_scanned', 0)} scanned package(s). ✓",
+                text_color="#69F0AE",
+            )
+        else:
+            self.code_deps_summary.configure(
+                text=(
+                    f"Dependency scan: {summary.get('packages_scanned', 0)} package(s) scanned, "
+                    f"{summary.get('vulnerable', 0)} vulnerable, {total_vulns} vuln(s)"
+                ),
+                text_color="#FFFFFF",
+            )
+
+        for pkg in packages:
+            vulns = pkg.get("vulns", [])
+            if not vulns:
+                continue
+
+            name = pkg.get("name", "?")
+            version = pkg.get("version", "?")
+            ecosystem = pkg.get("ecosystem", "?")
+            source = pkg.get("source", "")
+
+            self.code_deps_box.insert(ctk.END, f"\n📦 {name}@{version}", "pkg")
+            self.code_deps_box.insert(ctk.END, f"  ({ecosystem})", "muted")
+            if source:
+                self.code_deps_box.insert(ctk.END, f"  [{source}]", "muted")
+            self.code_deps_box.insert(ctk.END, "\n")
+
+            for v in vulns:
+                sev = str(v.get("severity") or "").upper()
+                if sev not in self.SEVERITY_COLORS:
+                    sev = "UNKNOWN"
+                vid = v.get("id", "?")
+                fixed = v.get("fixed")
+                fixed_str = f"  (fixed in {fixed})" if fixed else ""
+                self.code_deps_box.insert(ctk.END, f"    {sev:<8}", sev)
+                self.code_deps_box.insert(ctk.END, f"{vid}{fixed_str}\n", "cve")
+                summary_text = v.get("summary", "")
+                if summary_text:
+                    self.code_deps_box.insert(ctk.END, f"      {summary_text}\n", "muted")
+
     def export_codebase_pdf(self):
         """Exports the current codebase SAST report to a professional PDF."""
         if not self.codebase_report:
@@ -956,6 +1088,15 @@ class OmniScanGUI(ctk.CTk):
         box = self.cve_box
         box.tag_config("host", foreground="#FFFFFF")
         box.tag_config("port", foreground="#4FC3F7")
+        box.tag_config("muted", foreground="#9E9E9E")
+        box.tag_config("cve", foreground="#E0E0E0")
+        for severity, color in self.SEVERITY_COLORS.items():
+            box.tag_config(severity, foreground=color)
+
+    def _configure_deps_tags(self):
+        """Configures text tags used to color-code the dependency view."""
+        box = self.code_deps_box
+        box.tag_config("pkg", foreground="#FFFFFF")
         box.tag_config("muted", foreground="#9E9E9E")
         box.tag_config("cve", foreground="#E0E0E0")
         for severity, color in self.SEVERITY_COLORS.items():
